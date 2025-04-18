@@ -1,0 +1,118 @@
+# Overview
+
+The SiriusScan Agent is designed as part of the SiriusScan vulnerability scanning ecosystem. It addresses the challenge of performing distributed, task-driven vulnerability scans in a scalable, efficient, and secure manner. Targeted towards cybersecurity professionals and infrastructure security teams, the Agent allows automated, centrally-managed scans across diverse network environments using RabbitMQ commands, gRPC communications, and persistent state management through Valkey.
+
+# Core Features
+
+### 1. RabbitMQ Command Handling
+- **What it does:** Listens for task and status commands via RabbitMQ.
+- **Why it's important:** Centralized, asynchronous control of scan tasks and immediate status reporting.
+- **How it works:** Utilizes the Sirius Go API (`queue.Listen`) to manage incoming messages and responds with job updates.
+
+### 2. gRPC-based Scan Execution
+- **What it does:** Initiates and monitors vulnerability scans through gRPC.
+- **Why it's important:** Ensures reliable, secure, and efficient communication with the central scanning server.
+- **How it works:** The agent uses generated gRPC stubs to interact with server methods (`StartScan`, `CheckScanStatus`).
+
+### 3. Valkey Job State Management
+- **What it does:** Persistently stores job metadata and states.
+- **Why it's important:** Provides reliable job tracking, state persistence, and recovery capabilities.
+- **How it works:** Leverages the Sirius Go API (`store.KVStore`) to store and retrieve job details such as job ID, target, timestamps, status, and results.
+
+# User Experience
+
+### User Personas
+- **Security Analysts:** Require automated scanning to efficiently identify and assess vulnerabilities.
+- **System Administrators:** Need real-time job status updates and clear visibility into ongoing security operations.
+
+### Key User Flows
+1. Analyst triggers scan from central UI.
+2. System sends RabbitMQ `task` command.
+3. Agent initiates scan via gRPC and tracks progress in Valkey.
+4. Analyst checks scan status via RabbitMQ `status` command, receiving real-time updates from Agent.
+
+### UI/UX Considerations
+- Clear job status indications and intuitive command structures.
+- Real-time response capabilities to ensure continuous monitoring and interaction.
+
+# Technical Architecture
+
+### System Components
+- **RabbitMQ Listener:** Command and control messaging.
+- **Agent Manager:** Central control for handling tasks, job states, and orchestration.
+- **gRPC Client:** Interaction layer with the scanning server.
+- **Valkey Store:** Persistent storage of scan metadata.
+
+### Data Models
+- **Job:**
+  - ID, Target, Status (queued, in-progress, completed, failed), Start/End timestamps, Scan results.
+
+### APIs and Integrations
+- **RabbitMQ via Sirius Go API (`queue` package)**
+- **Valkey via Sirius Go API (`store` package)**
+- **Scanning server via gRPC**
+
+### Infrastructure Requirements
+- Environment variables for configuration (`SIRIUS_RABBITMQ`, `SIRIUS_VALKEY`, `SCAN_SERVER_ADDR`).
+- Docker or Kubernetes deployment environment recommended.
+
+# Development Roadmap
+
+### MVP Requirements
+- RabbitMQ message handling for `task` and `status`.
+- gRPC client integration for initiating and checking scan status.
+- Job data management in Valkey.
+- Basic resilience (auto-reconnect, graceful shutdown).
+
+### Future Enhancements
+- Enhanced security (TLS encryption, advanced credential management).
+- Scalability improvements (multi-agent orchestration).
+- Expanded data analytics/reporting features.
+- User interface/dashboard integration for visual scan management.
+
+# Logical Dependency Chain
+
+1. **Foundation:**
+   - Environment and API setup (RabbitMQ listener, gRPC client setup, Valkey store initialization).
+
+2. **MVP Functional Features:**
+   - Command handling (basic `task` and `status` commands).
+   - gRPC interaction with vulnerability server.
+   - Simple job state persistence.
+
+3. **Visibility and Usability:**
+   - Job status reporting through RabbitMQ.
+   - Basic logging and monitoring setup.
+
+4. **Reliability and Security:**
+   - Reconnection and failure recovery logic.
+   - Integration of secure communication methods (TLS).
+
+5. **Scalability and Advanced Features:**
+   - Support for multiple concurrent scan tasks.
+   - Advanced orchestration capabilities.
+
+# Risks and Mitigations
+
+- **Technical Challenges:**
+  - Risk: Network instability affecting RabbitMQ or gRPC.
+  - Mitigation: Implement robust reconnection logic and retry mechanisms.
+
+- **MVP Scoping:**
+  - Risk: Scope creep delaying MVP deployment.
+  - Mitigation: Clearly defined MVP requirements focused on core functionality only.
+
+- **Resource Constraints:**
+  - Risk: Insufficient resources causing delayed development or testing.
+  - Mitigation: Prioritize essential MVP features, modularize development tasks clearly.
+
+# Appendix
+
+### Research Findings
+- Existing Sirius Go API documentation.
+- Industry-standard practices for distributed vulnerability scanning.
+
+### Technical Specifications
+- Provided Sirius Go API SDK documentation.
+- gRPC protocol definitions (to be created or referenced from existing scanning server infrastructure).
+

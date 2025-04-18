@@ -1,0 +1,79 @@
+name: "Basic Agent Tests"
+description: "Basic functionality tests for the SiriusScan Agent Manager"
+parallel: false
+tests:
+  - name: "Basic Exec Command"
+    description: "Tests basic shell command execution"
+    agent_id: "test-agent-1"
+    message_type: "exec"
+    args:
+      command: "ls -la"
+      timeout: "10"
+    timeout: 30
+    validation:
+      expected_status: "completed"
+      validate_keys:
+        - "output"
+        - "exit_code"
+
+  - name: "Status Command"
+    description: "Tests agent status request"
+    agent_id: "test-agent-1"
+    message_type: "status"
+    args:
+      detail_level: "full"
+    timeout: 20
+    validation:
+      expected_status: "completed"
+      validate_keys:
+        - "cpu"
+        - "memory"
+        - "uptime"
+
+  - name: "Basic Scan Command"
+    description: "Tests basic vulnerability scan"
+    agent_id: "test-agent-2"
+    message_type: "scan"
+    args:
+      scan_type: "vulnerability"
+      target: "localhost"
+      depth: "2"
+      timeout: "60"
+    timeout: 90
+    validation:
+      expected_status: "completed"
+      expected_data:
+        scan_type: "vulnerability"
+      validate_keys:
+        - "found_vulnerabilities"
+        - "scan_time"
+        - "scanned_hosts"
+
+  - name: "Configuration Command"
+    description: "Tests agent configuration update"
+    agent_id: "test-agent-1"
+    message_type: "config"
+    args:
+      action: "set"
+      key: "scan.max_depth"
+      value: "5"
+    timeout: 15
+    validation:
+      expected_status: "completed"
+      expected_data:
+        success: "true"
+
+  - name: "Health Check Command"
+    description: "Tests agent health check"
+    agent_id: "test-agent-1"
+    message_type: "health"
+    args:
+      metrics: "cpu,memory,disk,network"
+    timeout: 15
+    validation:
+      expected_status: "completed"
+      validate_keys:
+        - "cpu"
+        - "memory"
+        - "disk"
+        - "network"

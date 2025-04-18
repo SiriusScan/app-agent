@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package scan.v1;
+
+option go_package = "github.com/SiriusScan/app-agent/proto/scan/v1;scanpb";
+
+// AgentService defines the gRPC interface for agent-server communication
+service AgentService {
+  // Connect registers an agent with the server and establishes a stream for commands
+  rpc Connect(ConnectRequest) returns (stream Command) {}
+  
+  // ReportResult sends back the result of a command execution
+  rpc ReportResult(CommandResult) returns (CommandAck) {}
+}
+
+// CommandType enumerates the supported command types
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_SCAN = 1;       // Execute local system scan
+  COMMAND_TYPE_EXECUTE = 2;    // Run specified command
+  COMMAND_TYPE_STATUS = 3;     // Report agent status
+  COMMAND_TYPE_UPDATE = 4;     // Update agent configuration
+}
+
+// ConnectRequest represents an agent's connection request
+message ConnectRequest {
+  string agent_id = 1;     // Unique identifier for the agent
+  string hostname = 2;     // Agent's hostname
+  string platform = 3;     // Operating system platform
+  map<string, string> metadata = 4;  // Additional agent metadata
+}
+
+// Command represents a task to be executed by the agent
+message Command {
+  string command_id = 1;           // Unique identifier for this command
+  CommandType type = 2;            // Type of command
+  oneof command_details {
+    ScanCommand scan = 3;          // Details for scan command
+    ExecuteCommand execute = 4;     // Details for execute command
+    StatusCommand status = 5;       // Details for status command
+    UpdateCommand update = 6;       // Details for update command
+  }
+  int64 timeout = 7;               // Command timeout in seconds
+}
+
+// ScanCommand contains parameters for a system scan
+message ScanCommand {
+  string scan_type = 1;            // Type of scan to perform
+  repeated string targets = 2;      // Scan targets (paths, ports, etc)
+  map<string, string> options = 3;  // Scan-specific options
+}
+
+// ExecuteCommand contains parameters for command execution
+message ExecuteCommand {
+  string command = 1;              // Command to execute
+  repeated string args = 2;        // Command arguments
+  string working_dir = 3;          // Working directory
+  map<string, string> env = 4;     // Environment variables
+}
+
+// StatusCommand requests agent status information
+message StatusCommand {
+  repeated string metrics = 1;      // Requested status metrics
+}
+
+// UpdateCommand contains agent configuration updates
+message UpdateCommand {
+  map<string, string> config = 1;  // Configuration key-value pairs
+  bool restart_required = 2;       // Whether update requires restart
+}
+
+// CommandResult represents the result of a command execution
+message CommandResult {
+  string command_id = 1;           // ID of the command this result is for
+  string agent_id = 2;             // ID of the agent reporting the result
+  string execution_status = 3;     // Execution status (success/error)
+  string output = 4;               // Command output or error message
+  map<string, string> metadata = 5; // Additional result metadata
+  int64 timestamp = 6;             // Unix timestamp of execution
+  oneof result_details {
+    ScanResult scan = 7;           // Details for scan result
+    ExecuteResult execute = 8;      // Details for execute result
+    StatusResult status = 9;        // Details for status result
+    UpdateResult update = 10;       // Details for update result
+  }
+}
+
+// ScanResult contains scan-specific result data
+message ScanResult {
+  repeated Finding findings = 1;    // Scan findings
+  string scan_id = 2;              // Unique scan identifier
+}
+
+// Finding represents a single scan finding
+message Finding {
+  string id = 1;                   // Finding identifier
+  string severity = 2;             // Finding severity
+  string description = 3;          // Finding description
+  map<string, string> details = 4; // Additional finding details
+}
+
+// ExecuteResult contains command execution details
+message ExecuteResult {
+  int32 exit_code = 1;             // Command exit code
+  string stdout = 2;               // Standard output
+  string stderr = 3;               // Standard error
+  int64 duration_ms = 4;           // Execution duration in milliseconds
+}
+
+// StatusResult contains agent status information
+message StatusResult {
+  map<string, string> metrics = 1; // Status metrics
+  SystemInfo system = 2;           // System information
+}
+
+// SystemInfo contains detailed system information
+message SystemInfo {
+  string os_version = 1;           // Operating system version
+  int64 uptime = 2;               // System uptime in seconds
+  int64 memory_total = 3;         // Total memory in bytes
+  int64 memory_free = 4;          // Free memory in bytes
+  float cpu_usage = 5;            // CPU usage percentage
+  map<string, string> extra = 6;  // Additional system information
+}
+
+// UpdateResult contains configuration update results
+message UpdateResult {
+  bool success = 1;               // Update success status
+  repeated string updated = 2;    // List of updated configurations
+  string error = 3;              // Error message if update failed
+}
+
+// CommandAck acknowledges receipt of a command result
+message CommandAck {
+  string command_id = 1;          // ID of the acknowledged command
+  string status = 2;              // Acknowledgment status
+} 

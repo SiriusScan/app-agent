@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SiriusScan Agent Manager - Dashboard</title>
+    <link rel="stylesheet" href="/static/css/main.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <header>
+        <div class="header-left">
+            <h1>SiriusScan Agent Manager</h1>
+            <div id="ws-status" class="status-indicator">
+                <span class="status-dot"></span>
+                <span class="status-text">Connecting</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <button id="refresh-btn" class="btn btn-secondary">
+                <i class="fas fa-sync-alt"></i> Refresh
+            </button>
+            <div class="last-update">
+                Last updated: <span id="last-update-time">--:--:--</span>
+            </div>
+        </div>
+    </header>
+
+    <div class="container">
+        <div class="sidebar">
+            <nav class="navigation">
+                <ul>
+                    <li class="active"><a href="/"><i class="fas fa-tachometer-alt"></i> Dashboard</a></li>
+                    <li><a href="/agents"><i class="fas fa-server"></i> Agents</a></li>
+                    <li><a href="/commands"><i class="fas fa-terminal"></i> Commands</a></li>
+                    <li><a href="/results"><i class="fas fa-clipboard-list"></i> Results</a></li>
+                    <li><a href="/settings"><i class="fas fa-cog"></i> Settings</a></li>
+                </ul>
+            </nav>
+
+            <div class="system-status panel">
+                <h3>System Status</h3>
+                <div class="status-item">
+                    <div class="status-label">Status:</div>
+                    <div class="status-value online"><i class="fas fa-circle"></i> Online</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Uptime:</div>
+                    <div class="status-value" id="uptime">--</div>
+                </div>
+                <div class="status-item">
+                    <div class="status-label">Server:</div>
+                    <div class="status-value" id="server-version">{{.ServerVersion}}</div>
+                </div>
+            </div>
+        </div>
+
+        <main>
+            <section class="statistics">
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-server"></i>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-title">Total Agents</div>
+                        <div class="stat-value" id="total-agents">0</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-plug"></i>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-title">Active Agents</div>
+                        <div class="stat-value" id="active-agents">0</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-terminal"></i>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-title">Total Commands</div>
+                        <div class="stat-value" id="total-commands">0</div>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-icon">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div class="stat-content">
+                        <div class="stat-title">Completed Commands</div>
+                        <div class="stat-value" id="completed-commands">0</div>
+                    </div>
+                </div>
+            </section>
+
+            <div class="dashboard-grid">
+                <section class="panel activity-panel">
+                    <div class="panel-header">
+                        <h2>Activity Feed</h2>
+                    </div>
+                    <div class="panel-content">
+                        <div id="activity-feed" class="activity-feed">
+                            <div class="loading-indicator">
+                                <i class="fas fa-spinner fa-spin"></i> Loading activity data...
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="panel command-panel">
+                    <div class="panel-header">
+                        <h2>Send Command</h2>
+                    </div>
+                    <div class="panel-content">
+                        <form id="command-form" class="command-form">
+                            <div class="form-group">
+                                <label for="agent-id">Agent:</label>
+                                <select id="agent-id" name="agent-id" required>
+                                    <option value="" disabled selected>Select an agent</option>
+                                    {{range .Agents}}
+                                    <option value="{{.ID}}" {{if ne .Status "active"}}disabled{{end}}>
+                                        {{.Name}} ({{.Status}})
+                                    </option>
+                                    {{end}}
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="command-type">Command Type:</label>
+                                <select id="command-type" name="command-type" required>
+                                    <option value="" disabled selected>Select command type</option>
+                                    <option value="custom">Custom Shell Command</option>
+                                    <option value="predefined">Predefined Command</option>
+                                </select>
+                            </div>
+                            
+                            <div id="custom-command-args" class="command-args hidden">
+                                <div class="form-group">
+                                    <label for="command-custom">Shell Command:</label>
+                                    <input type="text" id="command-custom" name="command-custom" placeholder="Enter shell command...">
+                                </div>
+                            </div>
+                            
+                            <div id="predefined-command-args" class="command-args hidden">
+                                <div class="form-group">
+                                    <label for="command-predefined">Select Command:</label>
+                                    <select id="command-predefined" name="command-predefined">
+                                        <option value="uname -a">System Info (uname -a)</option>
+                                        <option value="ps aux">Process List (ps aux)</option>
+                                        <option value="df -h">Disk Usage (df -h)</option>
+                                        <option value="netstat -tuln">Network Status (netstat -tuln)</option>
+                                        <option value="curl -I https://example.com">HTTP Check (curl)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">Send Command</button>
+                            </div>
+                        </form>
+                    </div>
+                </section>
+
+                <section class="panel history-panel">
+                    <div class="panel-header">
+                        <h2>Command History</h2>
+                    </div>
+                    <div class="panel-content">
+                        <div id="command-history" class="command-history">
+                            <div class="loading-indicator">
+                                <i class="fas fa-spinner fa-spin"></i> Loading command history...
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <footer>
+        <div class="footer-content">
+            <div class="copyright">© 2023 SiriusScan. All rights reserved.</div>
+            <div class="version">Version {{.Version}}</div>
+        </div>
+    </footer>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html> 

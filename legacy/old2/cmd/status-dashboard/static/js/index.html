@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SiriusScan Agent Manager</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="css/main.css">
+</head>
+<body>
+    <!-- Header Section -->
+    <header class="app-header">
+        <div class="header-content">
+            <div class="logo">
+                <img src="img/logo.svg" alt="SiriusScan Logo" class="logo-image">
+                <h1>SiriusScan Agent Manager</h1>
+            </div>
+            <div class="header-status">
+                <div class="status-indicator">
+                    <span class="status-dot"></span>
+                    <span class="status-text">Disconnected</span>
+                </div>
+                <div class="header-actions">
+                    <div class="last-update">
+                        Last updated: <span class="last-update-time">--:--</span>
+                    </div>
+                    <button class="btn refresh-btn">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Section -->
+    <main class="app-content">
+        <!-- System Status Summary -->
+        <section class="widget system-status">
+            <div class="widget-header">
+                <h2>System Status</h2>
+            </div>
+            <div class="widget-content">
+                <div class="status-grid">
+                    <div class="status-item">
+                        <div class="status-label">Server Status</div>
+                        <div id="server-status" class="status-value online">Online</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Uptime</div>
+                        <div id="uptime" class="status-value">23h 45m</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Version</div>
+                        <div id="server-version" class="status-value">v1.0.2</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Total Agents</div>
+                        <div id="total-agents" class="status-value">12</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Active Agents</div>
+                        <div id="active-agents" class="status-value">8</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Total Commands</div>
+                        <div id="total-commands" class="status-value">156</div>
+                    </div>
+                    <div class="status-item">
+                        <div class="status-label">Completed Commands</div>
+                        <div id="completed-commands" class="status-value">142</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <div class="main-grid">
+            <!-- Command Execution Panel -->
+            <section class="widget command-panel">
+                <div class="widget-header">
+                    <h2>Execute Command</h2>
+                </div>
+                <div class="widget-content">
+                    <form id="command-form" class="command-form">
+                        <div class="form-group">
+                            <label for="agent-select">Target Agent</label>
+                            <select id="agent-select" class="form-control">
+                                <option value="all">All Active Agents</option>
+                                <!-- Agent options will be populated by JavaScript -->
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="command-type">Command Type</label>
+                            <select id="command-type" class="form-control">
+                                <option value="custom">Custom Command</option>
+                                <option value="predefined">Predefined Command</option>
+                            </select>
+                        </div>
+                        
+                        <div id="custom-command-group" class="form-group">
+                            <label for="custom-command">Command</label>
+                            <input type="text" id="custom-command" class="form-control" placeholder="Enter command...">
+                        </div>
+                        
+                        <div id="predefined-command-group" class="form-group hidden">
+                            <label for="predefined-command">Select Command</label>
+                            <select id="predefined-command" class="form-control">
+                                <option value="scan">Vulnerability Scan</option>
+                                <option value="update">Update Agent</option>
+                                <option value="status">Check Status</option>
+                                <option value="restart">Restart Agent</option>
+                                <option value="collect-logs">Collect Logs</option>
+                            </select>
+                        </div>
+                        
+                        <div id="arguments-group" class="form-group hidden">
+                            <label for="command-arguments">Arguments</label>
+                            <input type="text" id="command-arguments" class="form-control" placeholder="Command arguments...">
+                        </div>
+                        
+                        <div class="form-group">
+                            <button type="submit" id="submit-command" class="btn btn-primary btn-block">
+                                <i class="fas fa-terminal"></i> Execute Command
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Command History -->
+            <section class="widget command-history-widget">
+                <div class="widget-header">
+                    <h2>Command History</h2>
+                </div>
+                <div class="widget-content">
+                    <div class="command-history">
+                        <div class="loading-indicator">Loading command history...</div>
+                        <!-- Command history items will be populated by JavaScript -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- Activity Feed -->
+            <section class="widget activity-widget">
+                <div class="widget-header">
+                    <h2>Activity Feed</h2>
+                </div>
+                <div class="widget-content">
+                    <div class="activity-feed">
+                        <div class="loading-indicator">Loading activity feed...</div>
+                        <!-- Activity feed items will be populated by JavaScript -->
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Footer Section -->
+    <footer class="app-footer">
+        <div class="footer-content">
+            <div class="copyright">
+                &copy; 2023 SiriusScan. All rights reserved.
+            </div>
+            <div class="footer-links">
+                <a href="#" class="footer-link">Documentation</a>
+                <a href="#" class="footer-link">API</a>
+                <a href="#" class="footer-link">Support</a>
+            </div>
+        </div>
+    </footer>
+
+    <!-- JavaScript -->
+    <script src="js/main.js"></script>
+</body>
+</html> 

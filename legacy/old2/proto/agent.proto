@@ -1,0 +1,88 @@
+syntax = "proto3";
+
+package sirius_app_agent;
+
+option go_package = "github.com/SiriusScan/app-agent/proto;proto";
+
+// AgentService defines the gRPC service for agent communication
+service AgentService {
+  // Connect establishes a bidirectional stream for command distribution
+  rpc Connect(stream AgentMessage) returns (stream CommandMessage) {}
+  
+  // ReportResult sends results back to the server
+  rpc ReportResult(ResultMessage) returns (ResultResponse) {}
+}
+
+// AgentStatus represents the current state of an agent
+enum AgentStatus {
+  AGENT_STATUS_UNSPECIFIED = 0;
+  AGENT_STATUS_READY = 1;
+  AGENT_STATUS_BUSY = 2;
+  AGENT_STATUS_ERROR = 3;
+}
+
+// ResultStatus represents the status of a command execution
+enum ResultStatus {
+  RESULT_STATUS_UNSPECIFIED = 0;
+  RESULT_STATUS_SUCCESS = 1;
+  RESULT_STATUS_ERROR = 2;
+  RESULT_STATUS_TIMEOUT = 3;
+  RESULT_STATUS_PENDING = 4;
+  RESULT_STATUS_UNKNOWN = 5;
+}
+
+// AgentMessage represents messages sent from agents to the server
+message AgentMessage {
+  string agent_id = 1;
+  string version = 2;
+  AgentStatus status = 3;
+  map<string, string> metadata = 4;
+  oneof payload {
+    HeartbeatMessage heartbeat = 5;
+    AuthRequest auth = 6;
+    ResultMessage result = 7;
+  }
+}
+
+// CommandMessage represents commands sent from the server to agents
+message CommandMessage {
+  string command_id = 1;
+  string agent_id = 2;
+  string type = 3;
+  map<string, string> parameters = 4;
+  int64 timeout_ms = 5;
+}
+
+// ResultMessage represents command execution results
+message ResultMessage {
+  string command_id = 1;
+  string agent_id = 2;
+  ResultStatus status = 3;
+  map<string, string> data = 4;
+  string error_message = 5;
+  string output = 6;        // Command output text
+  int32 exit_code = 7;      // Command exit code
+  string type = 8;          // Result type
+  map<string, string> metadata = 9; // Additional metadata
+  int64 completed_at = 10;  // Completion timestamp
+}
+
+// ResultResponse represents the server's acknowledgment of results
+message ResultResponse {
+  string command_id = 1;
+  bool accepted = 2;
+  string message = 3;
+}
+
+// HeartbeatMessage represents agent heartbeat data
+message HeartbeatMessage {
+  int64 timestamp = 1;
+  map<string, string> metrics = 2;
+}
+
+// AuthRequest represents agent authentication data
+message AuthRequest {
+  string agent_id = 1;
+  string auth_token = 2;
+  map<string, string> capabilities = 3;
+} 

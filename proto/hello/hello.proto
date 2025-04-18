@@ -1,0 +1,91 @@
+syntax = "proto3";
+
+package hello;
+option go_package = "github.com/SiriusScan/app-agent/proto/hello";
+
+// HelloService defines a simple service for agent-server communication
+service HelloService {
+  // Ping is a simple ping method to verify connectivity
+  rpc Ping(PingRequest) returns (PingResponse) {}
+  
+  // ExecuteCommand executes a shell command on the agent and returns the result
+  rpc ExecuteCommand(CommandRequest) returns (CommandResponse) {}
+  
+  // ConnectStream establishes a bidirectional stream for sending commands and receiving results
+  rpc ConnectStream(stream AgentMessage) returns (stream ServerMessage) {}
+}
+
+// PingRequest is a simple request message for the Ping method
+message PingRequest {
+  string agent_id = 1;
+}
+
+// PingResponse is a simple response message from the Ping method
+message PingResponse {
+  string message = 1;
+  int64 timestamp = 2;
+}
+
+// CommandRequest contains the command to be executed on the agent
+message CommandRequest {
+  string command = 1;
+}
+
+// CommandResponse contains the result of the executed command
+message CommandResponse {
+  string output = 1;    // Standard output of the command
+  string error = 2;     // Error message, if any
+  int32 exit_code = 3;  // Command exit code
+  int64 execution_time = 4; // Execution time in milliseconds
+}
+
+// MessageType defines the type of message being sent in the stream
+enum MessageType {
+  UNKNOWN = 0;
+  HEARTBEAT = 1;
+  COMMAND = 2;
+  RESULT = 3;
+  ACKNOWLEDGMENT = 4;
+}
+
+// AgentMessage is sent from the agent to the server
+message AgentMessage {
+  string agent_id = 1;
+  MessageType type = 2;
+  oneof payload {
+    HeartbeatMessage heartbeat = 3;
+    CommandResult result = 4;
+  }
+}
+
+// ServerMessage is sent from the server to the agent
+message ServerMessage {
+  string id = 1;
+  MessageType type = 2;
+  oneof payload {
+    CommandRequest command = 3;
+    Acknowledgment acknowledgment = 4;
+  }
+}
+
+// HeartbeatMessage contains agent status information
+message HeartbeatMessage {
+  int64 timestamp = 1;
+  double cpu_usage = 2;
+  double memory_usage = 3;
+}
+
+// CommandResult contains the result of a command execution
+message CommandResult {
+  string command = 1;
+  string output = 2;
+  string error = 3;
+  int32 exit_code = 4;
+  int64 execution_time = 5;
+}
+
+// Acknowledgment is sent to confirm receipt of a command result
+message Acknowledgment {
+  string command_id = 1;
+  string status = 2;
+} 

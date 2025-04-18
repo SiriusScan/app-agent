@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package scan;
+
+option go_package = ".;scan";
+
+// AgentService defines the gRPC service for agent communication
+service AgentService {
+  // Connect establishes a bidirectional stream for command distribution
+  rpc Connect(stream AgentMessage) returns (stream CommandMessage) {}
+  
+  // ReportResult sends scan results back to the server
+  rpc ReportResult(ResultMessage) returns (ResultResponse) {}
+
+  // SendCommand sends a command to a specific agent
+  rpc SendCommand(SendCommandRequest) returns (SendCommandResponse) {}
+
+  // ListAgents lists all connected agents
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse) {}
+
+  // GetCommandResult retrieves a command result by ID
+  rpc GetCommandResult(GetCommandResultRequest) returns (GetCommandResultResponse) {}
+
+  // ListCommandResults lists command results for an agent
+  rpc ListCommandResults(ListCommandResultsRequest) returns (ListCommandResultsResponse) {}
+}
+
+// AgentMessage represents messages sent from agents to the server
+message AgentMessage {
+  string agent_id = 1;
+  string version = 2;
+  AgentStatus status = 3;
+  map<string, string> metadata = 4;
+  oneof payload {
+    HeartbeatMessage heartbeat = 5;
+    AuthRequest auth = 6;
+    ResultMessage result = 7;
+  }
+}
+
+// CommandMessage represents commands sent from the server to agents
+message CommandMessage {
+  string command_id = 1;
+  string agent_id = 2;
+  CommandType type = 3;
+  map<string, string> parameters = 4;
+  int64 timeout_ms = 5;
+}
+
+// ResultMessage represents scan results
+message ResultMessage {
+  string command_id = 1;
+  string agent_id = 2;
+  ResultStatus status = 3;
+  map<string, string> data = 4;
+  string error_message = 5;
+  string output = 6;        // Command output text
+  int32 exit_code = 7;      // Command exit code
+  string type = 8;          // Result type
+  map<string, string> metadata = 9; // Additional metadata
+  int64 completed_at = 10;  // Completion timestamp
+}
+
+// ResultResponse represents the server's acknowledgment of results
+message ResultResponse {
+  string command_id = 1;
+  bool accepted = 2;
+  string message = 3;
+}
+
+// HeartbeatMessage represents agent heartbeat data
+message HeartbeatMessage {
+  int64 timestamp = 1;
+  map<string, string> metrics = 2;
+}
+
+// AuthRequest represents agent authentication data
+message AuthRequest {
+  string agent_id = 1;
+  string auth_token = 2;
+  map<string, string> capabilities = 3;
+}
+
+// SendCommandRequest represents a request to send a command to an agent
+message SendCommandRequest {
+  string agent_id = 1;
+  CommandMessage command = 2;
+}
+
+// SendCommandResponse represents the response to a send command request
+message SendCommandResponse {
+  string command_id = 1;
+  bool success = 2;
+  string message = 3;
+}
+
+// ListAgentsRequest represents a request to list all connected agents
+message ListAgentsRequest {
+  // Optional filters can be added here
+  string status_filter = 1;
+}
+
+// AgentInfo represents information about a connected agent
+message AgentInfo {
+  string agent_id = 1;
+  int64 last_active = 2;
+  string status = 3;
+  map<string, string> capabilities = 4;
+}
+
+// ListAgentsResponse represents the response to a list agents request
+message ListAgentsResponse {
+  repeated AgentInfo agents = 1;
+}
+
+// GetCommandResultRequest represents a request to get a command result
+message GetCommandResultRequest {
+  string command_id = 1;
+}
+
+// GetCommandResultResponse represents the response to a get command result request
+message GetCommandResultResponse {
+  ResultMessage result = 1;
+  string agent_id = 2;
+}
+
+// ListCommandResultsRequest represents a request to list command results
+message ListCommandResultsRequest {
+  string agent_id = 1;
+  string type = 2;
+  string status = 3;
+  int64 start_time = 4;
+  int64 end_time = 5;
+  int32 page = 6;
+  int32 limit = 7;
+  string sort_by = 8;
+  string sort_order = 9;
+}
+
+// ListCommandResultsResponse represents the response to a list command results request
+message ListCommandResultsResponse {
+  repeated ResultMessage results = 1;
+  int32 count = 2;
+}
+
+// AgentStatus represents the current state of an agent
+enum AgentStatus {
+  AGENT_STATUS_UNSPECIFIED = 0;
+  AGENT_STATUS_READY = 1;
+  AGENT_STATUS_BUSY = 2;
+  AGENT_STATUS_ERROR = 3;
+}
+
+// CommandType represents different types of commands
+enum CommandType {
+  COMMAND_TYPE_UNSPECIFIED = 0;
+  COMMAND_TYPE_SCAN = 1;
+  COMMAND_TYPE_UPDATE = 2;
+  COMMAND_TYPE_STOP = 3;
+}
+
+// ResultStatus represents the status of a command execution
+enum ResultStatus {
+  RESULT_STATUS_UNSPECIFIED = 0;
+  RESULT_STATUS_SUCCESS = 1;
+  RESULT_STATUS_ERROR = 2;
+  RESULT_STATUS_TIMEOUT = 3;
+  RESULT_STATUS_PENDING = 4;
+  RESULT_STATUS_UNKNOWN = 5;
+} 
