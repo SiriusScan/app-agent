@@ -1,0 +1,138 @@
+---
+description: Guidelines for using the task dashboard during agentic AI development
+globs: project/tasks/*.{json,go}
+alwaysApply: true
+---
+
+# Task Dashboard Usage Guidelines
+
+## Task Structure
+
+- **Task Organization**
+  - Tasks are hierarchically organized with main tasks and subtasks
+  - Each task has a unique ID (numeric for main tasks, dotted for subtasks)
+  - Dependencies are tracked between main tasks
+  - Status tracking with visual indicators (✅ done, 🔄 pending)
+
+- **Required Task Fields**
+  ```json
+  {
+    "id": "unique_id",
+    "title": "Clear, descriptive title",
+    "status": "pending|done",
+    "priority": "high|medium|low",
+    "dependencies": [task_ids],
+    "description": "Brief overview",
+    "details": "Implementation details",
+    "subtasks": []
+  }
+  ```
+
+## Dashboard Commands
+
+- **Basic Usage**
+  ```bash
+  # View task summary
+  go run project/tasks/dashboard.go
+  
+  # View detailed task information
+  go run project/tasks/dashboard.go --detailed
+  ```
+
+- **Visual Indicators**
+  - ✅ Completed tasks/subtasks
+  - 🔄 Pending tasks/subtasks
+  - 📌 Task markers in detailed view
+  - 🚀 Project header
+
+## Development Workflow
+
+- **Task Selection Process**
+  1. Run dashboard to view current progress
+  2. Check dependency chain (tasks with no pending dependencies)
+  3. Select highest priority available task
+  4. Review detailed task information
+  5. Begin implementation of subtasks in order
+
+- **Progress Tracking**
+  - Monitor completion percentages for both main tasks and subtasks
+  - Update task status after completing implementation
+  - Verify all subtasks are complete before marking main task as done
+  - Keep task.json synchronized with implementation progress
+
+- **Task Dependencies**
+  - Respect task dependency order during development
+  - Only start tasks when all dependencies are marked as done
+  - Update dependency list if new dependencies are discovered
+  - Document any changes to the dependency chain
+
+## Agentic AI Integration
+
+- **AI Task Context**
+  - Include task ID in all AI interactions
+  - Reference specific subtasks when discussing implementation
+  - Provide task details and description for context
+  - Maintain task status alignment with AI progress
+
+- **Implementation Guidelines**
+  - Break down complex tasks into manageable subtasks
+  - Update task status after each significant milestone
+  - Document any deviations from original task plan
+  - Keep AI informed of task dependencies and constraints
+
+- **Progress Reporting**
+  - Use dashboard output to track AI development progress
+  - Include task metrics in development reports
+  - Document completion of subtasks and main tasks
+  - Track overall project velocity
+
+## Best Practices
+
+- **Task Management**
+  - Keep tasks.json up to date with current progress
+  - Use meaningful task titles and descriptions
+  - Maintain clear dependency relationships
+  - Document implementation details thoroughly
+
+- **Status Updates**
+  - Update task status immediately after completion
+  - Verify all subtasks before updating main task status
+  - Include relevant commit hashes in task details
+  - Document any blockers or issues
+
+- **Code Organization**
+  - Align code structure with task hierarchy
+  - Use task IDs in branch names and commits
+  - Maintain traceability between tasks and code
+  - Document relationships between tasks and components
+
+## Task Review Process
+
+- **Completion Criteria**
+  - All subtasks implemented and tested
+  - Code documentation complete
+  - Tests passing
+  - No pending dependencies
+  - Implementation matches task details
+
+- **Review Steps**
+  1. Run dashboard with --detailed flag
+  2. Review all subtask implementations
+  3. Verify dependency completion
+  4. Check overall progress metrics
+  5. Update task status after successful review
+
+## Troubleshooting
+
+- **Common Issues**
+  - Mismatched task status
+  - Incomplete dependency chain
+  - Missing subtask implementation
+  - Incorrect progress calculation
+
+- **Resolution Steps**
+  1. Verify task.json structure
+  2. Check dependency relationships
+  3. Review implementation status
+  4. Update task status accordingly
+  5. Re-run dashboard to verify fixes 

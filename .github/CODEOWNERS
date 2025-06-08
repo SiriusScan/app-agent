@@ -1,0 +1,17 @@
+# These owners will be the default owners for everything in
+# the repo. Unless a later match takes precedence,
+# they will be requested for review when someone opens a pull request.
+*       @SiriusScan/maintainers
+
+# Go code ownership
+*.go    @SiriusScan/go-developers
+
+# Configuration files
+*.yml   @SiriusScan/devops
+*.yaml  @SiriusScan/devops
+
+# Documentation
+*.md    @SiriusScan/docs-team
+
+# Tests
+*_test.go   @SiriusScan/qa-team 

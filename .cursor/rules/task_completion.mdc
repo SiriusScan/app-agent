@@ -1,0 +1,186 @@
+---
+description: Guidelines for verifying task completion and updating task status during development
+globs: project/tasks/*.{json,go}
+alwaysApply: true
+---
+
+# Task Completion Verification Guidelines
+
+## Task Status Verification Process
+
+- **When to Check Task Status**
+  - After implementing a feature or fixing a bug
+  - When all subtasks of a main task are completed
+  - Before starting dependent tasks
+  - During code review preparation
+  - After merging changes to main branch
+
+- **Required Verification Steps**
+  ```bash
+  # 1. View detailed task status
+  go run project/tasks/dashboard.go --detailed
+  
+  # 2. Check implementation against task requirements
+  # 3. Verify all subtasks are complete
+  # 4. Update task status if all criteria are met
+  ```
+
+## Completion Criteria
+
+- **Code Implementation**
+  - All specified functionality is implemented
+  - Code follows project standards and patterns
+  - Unit tests are written and passing
+  - Integration tests are passing (if applicable)
+  - No known bugs or issues remain
+
+- **Documentation Requirements**
+  - Code is properly documented
+  - API documentation is updated (if applicable)
+  - README changes are made (if required)
+  - Change log is updated (if applicable)
+
+- **Testing Verification**
+  - All test cases pass
+  - Edge cases are covered
+  - Error handling is tested
+  - Performance requirements are met
+  - Security requirements are satisfied
+
+## Status Update Process
+
+- **Before Marking as Complete**
+  1. Run the dashboard in detailed mode
+  2. Check each subtask's implementation
+  3. Verify all completion criteria
+  4. Review dependent task impacts
+  5. Document any deviations or notes
+
+- **Completion Checklist**
+  ```
+  ✓ All subtasks implemented
+  ✓ Tests written and passing
+  ✓ Documentation updated
+  ✓ Code reviewed
+  ✓ No blocking issues
+  ✓ Dependencies satisfied
+  ```
+
+## Task Dependencies
+
+- **Dependency Verification**
+  - Check if task depends on other tasks
+  - Verify dependent tasks are completed
+  - Update dependency chain if needed
+  - Document any dependency changes
+
+- **Impact Assessment**
+  - Review impact on dependent tasks
+  - Check for breaking changes
+  - Update dependent task details if needed
+  - Communicate changes to team
+
+## Implementation Verification
+
+- **Code Review Checklist**
+  ```
+  ✓ Code follows project standards
+  ✓ All requirements implemented
+  ✓ Tests cover main scenarios
+  ✓ Documentation is complete
+  ✓ No security issues
+  ```
+
+- **Quality Checks**
+  - Code linting passes
+  - Static analysis clean
+  - Security scanning complete
+  - Performance benchmarks met
+  - API contracts satisfied
+
+## Status Indicators
+
+- **Visual Progress Tracking**
+  - ✅ Task complete (all criteria met)
+  - 🔄 Task in progress
+  - ⚠️ Task blocked
+  - ❌ Task failed verification
+
+- **Log Messages**
+  - Success: "✅ Task completed successfully"
+  - Progress: "🔄 Task implementation in progress"
+  - Warning: "⚠️ Task completion blocked"
+  - Error: "❌ Task verification failed"
+
+## Verification Examples
+
+- **RabbitMQ Integration Task**
+  ```
+  Task 1.2: Message Listener Implementation
+  Status: ✅ Complete
+  
+  Verification:
+  ✓ RabbitMQ connection established
+  ✓ Message processing implemented
+  ✓ Error handling in place
+  ✓ Graceful shutdown works
+  ✓ Health check responding
+  ```
+
+- **Authentication System Task**
+  ```
+  Task 2.3: Authentication System
+  Status: 🔄 In Progress
+  
+  Pending:
+  - Token revocation implementation
+  - Authentication middleware tests
+  ```
+
+## Common Verification Scenarios
+
+- **Feature Implementation**
+  1. Check all requirements are met
+  2. Verify test coverage
+  3. Review documentation
+  4. Test in development environment
+  5. Update task status
+
+- **Bug Fix Verification**
+  1. Confirm bug is fixed
+  2. Check regression tests
+  3. Document fix and impact
+  4. Update task status
+  5. Monitor for regressions
+
+## Task Status Updates
+
+- **When to Update Status**
+  - After all verification steps pass
+  - When all subtasks are complete
+  - After successful code review
+  - Post-deployment verification
+  - After regression testing
+
+- **Update Process**
+  1. Run detailed dashboard view
+  2. Verify completion criteria
+  3. Check dependent tasks
+  4. Update status in tasks.json
+  5. Document completion notes
+
+## Troubleshooting
+
+- **Common Issues**
+  - Incomplete verification
+  - Missing documentation
+  - Failed tests
+  - Dependency conflicts
+  - Integration issues
+
+- **Resolution Steps**
+  1. Review failure points
+  2. Check completion criteria
+  3. Address missing items
+  4. Re-verify implementation
+  5. Update status accordingly 

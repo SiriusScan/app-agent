@@ -1,0 +1,111 @@
+---
+description: Guidelines for creating and maintaining Cursor rules to ensure consistency and effectiveness.
+globs: .cursor/rules/*.mdc
+alwaysApply: true
+---
+
+- **Required Rule Structure:**
+  ```markdown
+  ---
+  description: Clear, one-line description of what the rule enforces
+  globs: path/to/files/*.ext, other/path/**/*
+  alwaysApply: boolean
+  ---
+
+  - **Main Points in Bold**
+    - Sub-points with details
+    - Examples and explanations
+  ```
+
+- **File References:**
+  - Use `[filename](mdc:Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/path/to/file)` ([filename](mdc:Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/filename)) to reference files
+  - Example: [prisma.mdc](mdc:Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/.cursor/rules/prisma.mdc) for rule references
+  - Example: [schema.prisma](mdc:Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/Sirius/prisma/schema.prisma) for code references
+
+- **Code Examples:**
+  - Use language-specific code blocks
+  ```typescript
+  // ✅ DO: Show good examples
+  const goodExample = true;
+  
+  // ❌ DON'T: Show anti-patterns
+  const badExample = false;
+  ```
+
+- **Development Guide**
+  - Apps are either frontend or backend. Backend app development happens inside of the sirius-engine container. This container has the associated directory mounted at `/app-agent` for dev mode. This means that local changes to the code will be reflected in the docker container at `/app-agent`. Any troubleshooting or restart commands MUST be executed in the container (for example: `docker exec sirius-engine cat /app-agent/go.mod`)
+  
+  - **Project Structure**
+    - Follow standard Go project layout:
+      ```
+      .
+      ├── cmd/                 # Main applications
+      │   └── app-name/       # Application entry points
+      ├── internal/           # Private application code
+      │   ├── agent/         # Core business logic
+      │   └── config/        # Configuration management
+      └── pkg/               # Public library code
+          ├── queue/         # Queue integration
+          └── store/         # Storage integration
+      ```
+    - Use meaningful package names that reflect their purpose
+    - Keep packages focused and cohesive
+
+  - **Testing Best Practices**
+    - Write descriptive, visual test output:
+      ```go
+      t.Log("\n🔍 Testing component...")
+      t.Logf("\nConfiguration:\n  %s", config)
+      t.Log("\n✅ Test passed" or "\n❌ Test failed")
+      ```
+    - Use table-driven tests for comprehensive coverage
+    - Test both success and error cases
+    - Mock external dependencies appropriately
+    - Use clear visual separators between test sections
+    - Include test configuration details in output
+    - Show clear success/failure indicators with emojis
+    - Document expected vs actual results
+    - Use horizontal lines to separate test cases
+
+  - **Error Handling**
+    - Return errors with context using fmt.Errorf
+    - Log errors at appropriate levels
+    - Use structured logging with slog
+    - Validate configuration early
+    - Implement graceful shutdown
+    - Handle context cancellation
+
+  - **Configuration Management**
+    - Use environment variables for configuration
+    - Validate all required configuration values
+    - Provide clear error messages for missing config
+    - Use strong typing for configuration values
+    - Document all configuration options
+
+  - **Code Organization**
+    - Follow Go idioms and conventions
+    - Use dependency injection for better testing
+    - Implement graceful startup/shutdown
+    - Use context for cancellation
+    - Keep functions focused and small
+    - Document exported types and functions
+
+- **Rule Content Guidelines:**
+  - Start with high-level overview
+  - Include specific, actionable requirements
+  - Show examples of correct implementation
+  - Reference existing code when possible
+  - Keep rules DRY by referencing other rules
+
+- **Rule Maintenance:**
+  - Update rules when new patterns emerge
+  - Add examples from actual codebase
+  - Remove outdated patterns
+  - Cross-reference related rules
+
+- **Best Practices:**
+  - Use bullet points for clarity
+  - Keep descriptions concise
+  - Include both DO and DON'T examples
+  - Reference actual code over theoretical examples
+  - Use consistent formatting across rules 

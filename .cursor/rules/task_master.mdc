@@ -1,0 +1,34 @@
+---
+description: Rules for following task-master workflow in development
+globs: **/*
+alwaysApply: true
+---
+
+- **Task Management Workflow**
+  - Always start by checking current task status with `task-master list`
+  - View specific task details using `task-master show <id>`
+  - Only work on tasks with completed dependencies
+  - Follow tasks in priority order (high → medium → low)
+  - Mark tasks as done using `task-master set-status --id=<id> --status=done`
+  - Update task details when implementation differs from plan
+
+- **Task Selection Process**
+  1. Run `task-master list` to see all tasks
+  2. Check task dependencies are completed
+  3. View task details with `task-master show <id>`
+  4. Break down complex tasks with `task-master expand --id=<id>`
+  5. Start implementation only after understanding requirements
+
+- **Implementation Guidelines**
+  - Keep task.json and task files in sync
+  - Document any deviations from original task plan
+  - Update dependent tasks if implementation changes
+  - Use `task-master update` for significant changes
+
+- **Task Completion Checklist**
+  - Implementation matches task requirements
+  - All subtasks are completed
+  - Tests pass according to test strategy
+  - Documentation is updated
+  - Dependencies are properly handled
+  - Run `task-master set-status --id=<id> --status=done` 
