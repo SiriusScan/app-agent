@@ -21,4 +21,4 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250414145226-207652e42e2e // indirect
 )
 
-replace github.com/SiriusScan/go-api => ../go-api
+// replace github.com/SiriusScan/go-api => ../go-api
