@@ -96,11 +96,9 @@ func NewAgent(cfg *config.AgentConfig, logger *zap.Logger) *Agent {
 func (a *Agent) Connect(ctx context.Context) error {
 	a.logger.Info("Connecting to server", zap.String("address", a.config.ServerAddress))
 
-	conn, err := grpc.DialContext(
-		ctx,
+	conn, err := grpc.NewClient(
 		a.config.ServerAddress,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithBlock(), // Wait for connection to be established
 	)
 	if err != nil {
 		return fmt.Errorf("failed to connect to server: %w", err)

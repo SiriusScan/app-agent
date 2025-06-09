@@ -14,7 +14,9 @@ import (
 func main() {
 	// Initialize logger
 	logger, _ := zap.NewDevelopment()
-	defer logger.Sync()
+	defer func() {
+		_ = logger.Sync() // Ignore error as recommended by zap docs for development logger
+	}()
 
 	logger.Info("Starting gRPC Hello World Server")
 

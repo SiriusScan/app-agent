@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -12,8 +11,6 @@ import (
 	"github.com/SiriusScan/app-agent/internal/commands"
 	"go.uber.org/zap"
 )
-
-var errBrewNotFound = errors.New("homebrew (brew) command not found")
 
 // gatherMacOSPackages collects installed software information on macOS.
 // Currently, it primarily targets packages installed via Homebrew.

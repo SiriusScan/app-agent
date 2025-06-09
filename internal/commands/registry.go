@@ -3,7 +3,6 @@ package commands
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -32,7 +31,7 @@ func Register(prefix string, cmd Command) {
 	defer registryMu.Unlock()
 
 	if _, dup := registry[prefix]; dup {
-		panic(fmt.Sprintf("commands: Register called twice for prefix %q", prefix))
+		panic("commands: Register called twice for prefix " + prefix)
 	}
 	registry[prefix] = cmd
 
