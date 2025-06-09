@@ -22,3 +22,4 @@ type Client interface {
 	// Close closes the store connection
 	Close() error
 }
+ 

@@ -85,3 +85,4 @@ func (a *adapter) Close() error {
 	}
 	return a.store.Close()
 }
+ 

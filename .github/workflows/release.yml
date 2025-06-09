@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.23"
+          cache: true
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Build binaries
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: SiriusScan Agent ${{ github.ref }}
+          body: |
+            ## SiriusScan Agent Release ${{ github.ref }}
+
+            ### What's New
+            - Cross-platform agent builds for Linux and Windows
+            - Improved command processing and scripting support
+            - Enhanced status reporting capabilities
+
+            ### Downloads
+            - **Linux (amd64)**: `sirius-agent-linux-amd64`
+            - **Windows (amd64)**: `sirius-agent-windows-amd64.exe`
+
+            ### Installation
+            1. Download the appropriate binary for your platform
+            2. Make it executable (Linux/Mac): `chmod +x sirius-agent-*`
+            3. Configure your environment variables or config file
+            4. Run the agent: `./sirius-agent-linux-amd64` or `sirius-agent-windows-amd64.exe`
+
+          draft: false
+          prerelease: false
+
+      - name: Upload Linux Binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./bin/sirius-agent-linux-amd64
+          asset_name: sirius-agent-linux-amd64
+          asset_content_type: application/octet-stream
+
+      - name: Upload Windows Binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./bin/sirius-agent-windows-amd64.exe
+          asset_name: sirius-agent-windows-amd64.exe
+          asset_content_type: application/octet-stream

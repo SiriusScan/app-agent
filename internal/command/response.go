@@ -115,3 +115,4 @@ func FromJSON(data string) (*CommandResponse, error) {
 	}
 	return &response, nil
 }
+ 

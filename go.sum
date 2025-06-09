@@ -1,3 +1,5 @@
+github.com/SiriusScan/go-api v0.0.4 h1:Q2HPppkutEB7hUepAIIpF+6xYEw0ib9pAdXEbUlXkiw=
+github.com/SiriusScan/go-api v0.0.4/go.mod h1:MAPRaLMgNPjP0qTp4BmDq80gzBQqwaY5YbQvlaLBwoc=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/go-logr/logr v1.4.2 h1:6pFjapn8bFcIbiKo3XT4j/BhANplGihG6tvd+8rYgrY=
