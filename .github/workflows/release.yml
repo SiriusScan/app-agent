@@ -8,6 +8,8 @@ on:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -36,15 +38,11 @@ jobs:
           ./scripts/build.sh
 
       - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref }}
-          release_name: SiriusScan Agent ${{ github.ref }}
+          name: SiriusScan Agent ${{ github.ref_name }}
           body: |
-            ## SiriusScan Agent Release ${{ github.ref }}
+            ## SiriusScan Agent Release ${{ github.ref_name }}
 
             ### What's New
             - Cross-platform agent builds for Linux, Windows, and macOS
@@ -66,35 +64,9 @@ jobs:
                - Windows: `sirius-agent-windows-amd64.exe`
                - macOS: `./sirius-agent-darwin-arm64`
 
+          files: |
+            bin/sirius-agent-linux-amd64
+            bin/sirius-agent-windows-amd64.exe
+            bin/sirius-agent-darwin-arm64
           draft: false
           prerelease: false
-
-      - name: Upload Linux Binary
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./bin/sirius-agent-linux-amd64
-          asset_name: sirius-agent-linux-amd64
-          asset_content_type: application/octet-stream
-
-      - name: Upload Windows Binary
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./bin/sirius-agent-windows-amd64.exe
-          asset_name: sirius-agent-windows-amd64.exe
-          asset_content_type: application/octet-stream
-
-      - name: Upload macOS ARM64 Binary
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./bin/sirius-agent-darwin-arm64
-          asset_name: sirius-agent-darwin-arm64
-          asset_content_type: application/octet-stream
