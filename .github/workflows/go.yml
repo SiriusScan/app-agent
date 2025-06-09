@@ -15,8 +15,17 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.21"
+          go-version: "1.23"
           cache: true
+
+      - name: Configure Git for private modules
+        run: |
+          git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set GOPRIVATE
+        run: echo "GOPRIVATE=github.com/SiriusScan/*" >> $GITHUB_ENV
 
       - name: Install dependencies
         run: go mod download
@@ -24,8 +33,13 @@ jobs:
       - name: Run tests
         run: go test -v ./...
 
-      - name: Build
-        run: go build -v ./cmd/app-agent
+      - name: Build agent
+        run: go build -v ./cmd/agent
+
+      - name: Test cross-platform builds
+        run: |
+          chmod +x scripts/build.sh
+          ./scripts/build.sh
 
       - name: Run golangci-lint
         uses: golangci/golangci-lint-action@v3
