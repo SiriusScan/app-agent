@@ -38,19 +38,24 @@ jobs:
             ## SiriusScan Agent Release ${{ github.ref }}
 
             ### What's New
-            - Cross-platform agent builds for Linux and Windows
+            - Cross-platform agent builds for Linux, Windows, and macOS
             - Improved command processing and scripting support
             - Enhanced status reporting capabilities
+            - Apple Silicon (ARM64) support for macOS devices
 
             ### Downloads
             - **Linux (amd64)**: `sirius-agent-linux-amd64`
             - **Windows (amd64)**: `sirius-agent-windows-amd64.exe`
+            - **macOS (ARM64 - Apple Silicon)**: `sirius-agent-darwin-arm64`
 
             ### Installation
             1. Download the appropriate binary for your platform
             2. Make it executable (Linux/Mac): `chmod +x sirius-agent-*`
             3. Configure your environment variables or config file
-            4. Run the agent: `./sirius-agent-linux-amd64` or `sirius-agent-windows-amd64.exe`
+            4. Run the agent: 
+               - Linux: `./sirius-agent-linux-amd64`
+               - Windows: `sirius-agent-windows-amd64.exe`
+               - macOS: `./sirius-agent-darwin-arm64`
 
           draft: false
           prerelease: false
@@ -73,4 +78,14 @@ jobs:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./bin/sirius-agent-windows-amd64.exe
           asset_name: sirius-agent-windows-amd64.exe
+          asset_content_type: application/octet-stream
+
+      - name: Upload macOS ARM64 Binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./bin/sirius-agent-darwin-arm64
+          asset_name: sirius-agent-darwin-arm64
           asset_content_type: application/octet-stream

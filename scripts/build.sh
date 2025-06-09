@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Build script for SiriusScan Agent
-# Builds agent for Windows and Linux platforms
+# Builds agent for Windows, Linux, and macOS (ARM64) platforms
 
 set -e
 
@@ -26,6 +26,10 @@ GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o "${BUILD_DIR}/${APP_NAME}-l
 # Build for Windows (amd64) 
 echo "🪟 Building for Windows (amd64)..."
 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o "${BUILD_DIR}/${APP_NAME}-windows-amd64.exe" "./${SOURCE_DIR}/main.go"
+
+# Build for macOS (ARM64 - Apple Silicon)
+echo "🍎 Building for macOS (ARM64 - Apple Silicon)..."
+GOOS=darwin GOARCH=arm64 go build -ldflags="-s -w" -o "${BUILD_DIR}/${APP_NAME}-darwin-arm64" "./${SOURCE_DIR}/main.go"
 
 # Build for current platform (for local testing)
 echo "🏠 Building for current platform..."
