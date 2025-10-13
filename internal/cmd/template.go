@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/parser"
@@ -73,7 +76,10 @@ Examples:
 }
 
 func newTemplateRunAllCommand() *cobra.Command {
-	return &cobra.Command{
+	var workers int
+	var timeout int
+
+	cmd := &cobra.Command{
 		Use:   "run-all <directory>",
 		Short: "Run all templates in a directory",
 		Long: `Discover and execute all templates in the specified directory.
@@ -81,18 +87,38 @@ func newTemplateRunAllCommand() *cobra.Command {
 The command will:
   1. Recursively find all .yaml/.yml files
   2. Parse and validate each template
-  3. Execute all valid templates
+  3. Execute all valid templates in parallel using a worker pool
   4. Output results (one per line in JSONL format, or summary in text format)
 
 Examples:
   sirius-agent template run-all ./templates/
-  sirius-agent template run-all /etc/sirius/templates/ --format text`,
+  sirius-agent template run-all /etc/sirius/templates/ --format text
+  sirius-agent template run-all ./templates/ --workers 10
+  sirius-agent template run-all ./templates/ --workers 1 --timeout 300`,
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			directory := args[0]
 
+			// Validate worker count
+			if workers > 0 {
+				if err := executor.ValidateWorkerCount(workers); err != nil {
+					return err
+				}
+			}
+
 			// Discover templates
-			ctx := context.Background()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			// Handle Ctrl+C for graceful shutdown
+			go func() {
+				sigChan := make(chan os.Signal, 1)
+				signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
+				<-sigChan
+				fmt.Fprintf(os.Stderr, "\n⚠️  Interrupt received, stopping execution...\n")
+				cancel()
+			}()
+
 			templates, errors := parser.DiscoverTemplatesWithContext(ctx, directory)
 
 			if len(errors) > 0 && format == "text" {
@@ -106,19 +132,32 @@ Examples:
 				return fmt.Errorf("no valid templates found in %s", directory)
 			}
 
-			// Execute all templates
-			exec := executor.New()
-			var results []*types.Result
-			var matchCount int
+			// Configure worker pool
+			config := executor.DefaultWorkerPoolConfig()
+			config.Context = ctx
+			config.Workers = workers
+			if timeout > 0 {
+				config.PerTemplateTimeout = time.Duration(timeout) * time.Second
+			}
 
-			for _, template := range templates {
-				result, err := exec.ExecuteTemplate(ctx, template)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error executing %s: %v\n", template.ID, err)
-					continue
+			// Execute all templates in parallel
+			if format == "text" {
+				fmt.Fprintf(os.Stderr, "🚀 Executing %d template(s) with %d worker(s)...\n", len(templates), workers)
+			}
+
+			results, execErrors := executor.ExecuteTemplatesParallelWithConfig(templates, config)
+
+			if len(execErrors) > 0 && format == "text" {
+				fmt.Fprintf(os.Stderr, "⚠️  Execution errors:\n")
+				for _, err := range execErrors {
+					fmt.Fprintf(os.Stderr, "  - %v\n", err)
 				}
-				results = append(results, result)
-				if result.Matched {
+			}
+
+			// Count matches
+			matchCount := 0
+			for _, result := range results {
+				if result != nil && result.Matched {
 					matchCount++
 				}
 			}
@@ -134,6 +173,11 @@ Examples:
 			return outputResultsJSON(results)
 		},
 	}
+
+	cmd.Flags().IntVarP(&workers, "workers", "w", 0, "Number of parallel workers (0 = CPU count, max 50)")
+	cmd.Flags().IntVarP(&timeout, "timeout", "t", 300, "Per-template timeout in seconds (default 300)")
+
+	return cmd
 }
 
 func newTemplateValidateCommand() *cobra.Command {
