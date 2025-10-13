@@ -261,4 +261,3 @@ func (e *Executor) calculateConfidence(logic types.DetectionLogic, steps []types
 		return 0.0
 	}
 }
-
