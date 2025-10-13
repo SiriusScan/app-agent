@@ -149,8 +149,9 @@ When connected to server, these commands can be sent from the server console or 
 **Error:** `Command not found in internal registry, attempting script execution`
 
 **Solution:** Use the correct command name with `internal:` prefix:
+
 - ❌ `template-scan`
-- ❌ `scan`  
+- ❌ `scan`
 - ✅ `internal:template-scan`
 
 ### No Templates Found
@@ -158,6 +159,7 @@ When connected to server, these commands can be sent from the server console or 
 **Error:** `no templates found in "/app-agent/templates"`
 
 **Solutions:**
+
 1. Check template directory exists: `ls /app-agent/templates`
 2. Ensure templates are valid YAML
 3. Use `--directory` flag to specify correct path
@@ -168,6 +170,7 @@ When connected to server, these commands can be sent from the server console or 
 **Error:** `worker count must be between 1 and 50`
 
 **Solution:** Use valid worker count:
+
 ```bash
 internal:template-scan --workers 10  # Valid
 ```
@@ -205,6 +208,7 @@ Currently available modules:
 - **file_content** - Regex pattern matching in files
 
 View details:
+
 ```bash
 sirius-agent module info file_hash
 sirius-agent module info file_content
@@ -257,4 +261,3 @@ $(hostname) internal:template-scan --all
 sirius-agent version
 # Output: sirius-agent version 1.0.0-mvp
 ```
-

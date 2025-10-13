@@ -60,11 +60,25 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 		// Directory scan
 		directory := config.Directory
 		if directory == "" {
-			// Default to standard template directories
-			directory = "/app-agent/templates"
-			// Check if custom templates exist
-			if _, err := os.Stat("/app-agent/custom-templates"); err == nil {
-				directory = "/app-agent/custom-templates"
+			// Try multiple default directories in order of preference
+			defaultDirs := []string{
+				"/app-agent/custom-templates",
+				"/app-agent/templates",
+				"./testing/test-templates",
+				"./templates",
+			}
+
+			for _, dir := range defaultDirs {
+				if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
+					directory = dir
+					agentInfo.Logger.Info("Using default template directory",
+						zap.String("directory", directory))
+					break
+				}
+			}
+
+			if directory == "" {
+				return "", fmt.Errorf("no template directory found. Tried: %v. Use --directory to specify location", defaultDirs)
 			}
 		}
 
@@ -73,10 +87,19 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 		templates, discoveryErrors = parser.DiscoverTemplatesWithContext(ctx, directory)
 
 		if len(templates) == 0 {
+			errMsg := fmt.Sprintf("no valid templates found in %q", directory)
 			if len(discoveryErrors) > 0 {
-				return "", fmt.Errorf("no valid templates found in %q: %d errors occurred", directory, len(discoveryErrors))
+				errMsg += fmt.Sprintf(" (%d discovery errors)", len(discoveryErrors))
+				for i, err := range discoveryErrors {
+					if i < 3 { // Show first 3 errors
+						errMsg += fmt.Sprintf("\n  - %v", err)
+					}
+				}
+				if len(discoveryErrors) > 3 {
+					errMsg += fmt.Sprintf("\n  ... and %d more errors", len(discoveryErrors)-3)
+				}
 			}
-			return "", fmt.Errorf("no templates found in %q", directory)
+			return "", fmt.Errorf(errMsg)
 		}
 	}
 
