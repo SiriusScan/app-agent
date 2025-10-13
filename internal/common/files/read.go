@@ -108,3 +108,13 @@ func ReadFileString(path string) (string, error) {
 	return string(data), nil
 }
 
+// ReadFileWithLimit reads a file with a custom size limit.
+// This is a convenience function for modules that need to specify a different limit.
+func ReadFileWithLimit(path string, maxSize int64) ([]byte, error) {
+	opts := ReadOptions{
+		MaxSize: maxSize,
+		Timeout: DefaultReadTimeout,
+	}
+	return ReadFileWithOptions(path, opts)
+}
+

@@ -63,3 +63,43 @@ func (e *ExecutionError) Error() string {
 	return fmt.Sprintf("execution error in module %s: %s", e.Module, e.Message)
 }
 
+// Helper functions for creating common errors
+
+// NewInvalidConfigError creates a new InvalidConfig error
+func NewInvalidConfigError(message string) error {
+	return &InvalidConfig{Message: message}
+}
+
+// NewFileNotFoundError creates a new FileNotFound error
+func NewFileNotFoundError(path string) error {
+	return &FileNotFound{Path: path}
+}
+
+// NewPermissionDeniedError creates a new PermissionDenied error
+func NewPermissionDeniedError(resource string) error {
+	return &PermissionDenied{Resource: resource, Operation: "access"}
+}
+
+// NewTimeoutError creates a new Timeout error
+func NewTimeoutError(operation string, duration interface{}) error {
+	return &Timeout{Operation: operation, Duration: duration}
+}
+
+// IsFileNotFound checks if an error is a FileNotFound error
+func IsFileNotFound(err error) bool {
+	_, ok := err.(*FileNotFound)
+	return ok
+}
+
+// IsPermissionDenied checks if an error is a PermissionDenied error
+func IsPermissionDenied(err error) bool {
+	_, ok := err.(*PermissionDenied)
+	return ok
+}
+
+// IsTimeout checks if an error is a Timeout error
+func IsTimeout(err error) bool {
+	_, ok := err.(*Timeout)
+	return ok
+}
+

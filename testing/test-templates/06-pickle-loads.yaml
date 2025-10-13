@@ -1,0 +1,29 @@
+id: CVE-2024-TEST-006
+info:
+  name: Unsafe pickle.loads() Usage
+  author: Sirius Scan
+  severity: critical
+  description: Detects use of pickle.loads() which can lead to arbitrary code execution
+  references:
+    - https://docs.python.org/3/library/pickle.html
+  cve:
+    - CVE-2024-TEST-006
+  tags:
+    - python
+    - deserialization
+    - pickle
+  version: "1.0.0"
+
+detection:
+  logic: all
+  steps:
+    - type: file_content
+      platforms:
+        - linux
+        - darwin
+        - windows
+      weight: 1.0
+      config:
+        path: testing/test-data/vulnerable-code.py
+        regex: 'pickle\.loads\s*\('
+

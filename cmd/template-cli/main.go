@@ -6,7 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	_ "github.com/SiriusScan/app-agent/internal/modules/filehash" // Register modules
+	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register modules
+	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"
 	"github.com/SiriusScan/app-agent/internal/modules/registry"
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/parser"

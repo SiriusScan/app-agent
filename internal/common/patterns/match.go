@@ -247,6 +247,62 @@ func FindAllWithOptions(pattern, text string, opts MatchOptions) ([]string, erro
 	}
 }
 
+// MatchWithTimeout checks if a pattern matches with a custom context.
+// This allows the caller to control timeout and cancellation.
+func MatchWithTimeout(ctx context.Context, pattern, text string) (bool, error) {
+	// Compile the regex
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return false, fmt.Errorf("invalid regex pattern %q: %w", pattern, err)
+	}
+
+	// Run regex matching with timeout
+	type matchResult struct {
+		matched bool
+	}
+	resultChan := make(chan matchResult, 1)
+
+	go func() {
+		matched := re.MatchString(text)
+		resultChan <- matchResult{matched: matched}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case result := <-resultChan:
+		return result.matched, nil
+	}
+}
+
+// ExtractMatchWithTimeout finds and returns the first match with a custom context.
+// Returns the matched text or empty string if no match.
+func ExtractMatchWithTimeout(ctx context.Context, pattern, text string) (string, error) {
+	// Compile the regex
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid regex pattern %q: %w", pattern, err)
+	}
+
+	// Run regex matching with timeout
+	type findResult struct {
+		match string
+	}
+	resultChan := make(chan findResult, 1)
+
+	go func() {
+		match := re.FindString(text)
+		resultChan <- findResult{match: match}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case result := <-resultChan:
+		return result.match, nil
+	}
+}
+
 // TimeoutError indicates a pattern matching operation timed out
 type TimeoutError struct {
 	Pattern string
