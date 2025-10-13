@@ -47,4 +47,3 @@ func GetFileSize(path string) int64 {
 	}
 	return info.Size()
 }
-
