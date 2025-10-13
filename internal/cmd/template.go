@@ -199,14 +199,19 @@ Examples:
 			}
 
 			// Output results
-			if format == "jsonl" {
+			switch format {
+			case "jsonl":
 				return outputResultsJSONL(results)
-			} else if format == "text" {
+			case "text":
 				return outputResultsText(results, matchCount)
+			case "json-array":
+				return outputResultsJSON(results)
+			case "json":
+				// JSON with summary (same as server command)
+				return outputResultsJSONWithSummary(results, matchCount, len(templates))
+			default:
+				return outputResultsJSONL(results) // Default to JSONL
 			}
-
-			// Default: JSON array
-			return outputResultsJSON(results)
 		},
 	}
 
@@ -456,6 +461,35 @@ func outputResultsText(results []*types.Result, matchCount int) error {
 	}
 
 	return nil
+}
+
+func outputResultsJSONWithSummary(results []*types.Result, matchCount, totalTemplates int) error {
+	writer, err := getOutputWriter()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if writer != os.Stdout {
+			writer.Close()
+		}
+	}()
+
+	// Create output structure with summary (similar to server command)
+	output := struct {
+		Summary struct {
+			TotalTemplates int `json:"total_templates"`
+			Matched        int `json:"matched"`
+		} `json:"summary"`
+		Results []*types.Result `json:"results"`
+	}{}
+
+	output.Summary.TotalTemplates = totalTemplates
+	output.Summary.Matched = matchCount
+	output.Results = results
+
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(output)
 }
 
 func outputJSON(data interface{}) error {

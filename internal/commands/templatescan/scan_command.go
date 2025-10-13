@@ -12,7 +12,8 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/SiriusScan/app-agent/internal/commands"
-	"github.com/SiriusScan/app-agent/internal/commands/scan"         // For package enumeration
+	"github.com/SiriusScan/app-agent/internal/commands/scan" // For package enumeration
+	"github.com/SiriusScan/app-agent/internal/common/color"
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register module
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"    // Register module
 	"github.com/SiriusScan/app-agent/internal/template/executor"
@@ -202,8 +203,8 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 			}
 			i++
 			format := parts[i]
-			if format != "json" && format != "text" {
-				return nil, fmt.Errorf("invalid format: %s (must be 'json' or 'text')", format)
+			if format != "json" && format != "jsonl" && format != "json-array" && format != "text" {
+				return nil, fmt.Errorf("invalid format: %s (must be 'json', 'jsonl', 'json-array', or 'text')", format)
 			}
 			config.Format = format
 
@@ -229,10 +230,16 @@ func (c *ScanCommand) generateOutput(
 	executionTime time.Duration,
 	format string,
 ) (string, error) {
-	if format == "text" {
+	switch format {
+	case "text":
 		return c.generateTextOutput(templates, results, discoveryErrors, execErrors, executionTime)
+	case "jsonl":
+		return c.generateJSONLOutput(templates, results, discoveryErrors, execErrors, executionTime)
+	case "json-array":
+		return c.generateJSONArrayOutput(templates, results, discoveryErrors, execErrors, executionTime)
+	default: // "json"
+		return c.generateJSONOutput(templates, results, discoveryErrors, execErrors, executionTime)
 	}
-	return c.generateJSONOutput(templates, results, discoveryErrors, execErrors, executionTime)
 }
 
 // generateJSONOutput generates JSON formatted output
@@ -288,6 +295,51 @@ func (c *ScanCommand) generateJSONOutput(
 	return string(jsonData), nil
 }
 
+// generateJSONLOutput generates JSONL formatted output (one JSON object per line)
+func (c *ScanCommand) generateJSONLOutput(
+	templates []*types.Template,
+	results []*types.Result,
+	discoveryErrors []error,
+	execErrors []error,
+	executionTime time.Duration,
+) (string, error) {
+	var output strings.Builder
+
+	// Each result is a separate JSON line
+	for _, result := range results {
+		if result == nil {
+			continue
+		}
+
+		jsonData, err := json.Marshal(result)
+		if err != nil {
+			return "", fmt.Errorf("failed to marshal result: %w", err)
+		}
+
+		output.WriteString(string(jsonData))
+		output.WriteString("\n")
+	}
+
+	return output.String(), nil
+}
+
+// generateJSONArrayOutput generates JSON array formatted output
+func (c *ScanCommand) generateJSONArrayOutput(
+	templates []*types.Template,
+	results []*types.Result,
+	discoveryErrors []error,
+	execErrors []error,
+	executionTime time.Duration,
+) (string, error) {
+	// Simple array of results
+	jsonData, err := json.MarshalIndent(results, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal JSON array: %w", err)
+	}
+
+	return string(jsonData), nil
+}
+
 // generateTextOutput generates human-readable text output
 func (c *ScanCommand) generateTextOutput(
 	templates []*types.Template,
@@ -309,7 +361,7 @@ func (c *ScanCommand) generateTextOutput(
 		}
 	}
 
-	output.WriteString(fmt.Sprintf("📊 Summary:\n"))
+	output.WriteString("📊 Summary:\n")
 	output.WriteString(fmt.Sprintf("  Total Templates: %d\n", len(templates)))
 	output.WriteString(fmt.Sprintf("  Matched: %d\n", matchedCount))
 	output.WriteString(fmt.Sprintf("  Execution Time: %v\n\n", executionTime.Round(time.Millisecond)))
@@ -346,7 +398,10 @@ func (c *ScanCommand) generateTextOutput(
 		}
 
 		output.WriteString(fmt.Sprintf("[%d] %s %s (ID: %s)\n", i+1, status, result.TemplateName, result.TemplateID))
-		output.WriteString(fmt.Sprintf("    Severity: %s | Confidence: %.2f\n", result.Severity, result.Confidence))
+
+		// Color-code severity
+		severityText := color.ColorizedSeverity(string(result.Severity))
+		output.WriteString(fmt.Sprintf("    Severity: %s | Confidence: %.2f\n", severityText, result.Confidence))
 
 		if result.Matched && len(result.Steps) > 0 {
 			output.WriteString(fmt.Sprintf("    Matched Steps: %d/%d\n", countMatchedSteps(result), len(result.Steps)))
@@ -360,9 +415,11 @@ func (c *ScanCommand) generateTextOutput(
 
 	output.WriteString(strings.Repeat("=", 50) + "\n")
 	if matchedCount > 0 {
-		output.WriteString("⚠️  Vulnerabilities detected!\n")
+		message := color.Colorize("⚠️  Vulnerabilities detected!", color.BrightRed+color.Bold)
+		output.WriteString(message + "\n")
 	} else {
-		output.WriteString("✅ No vulnerabilities detected.\n")
+		message := color.Colorize("✅ No vulnerabilities detected.", color.BrightGreen+color.Bold)
+		output.WriteString(message + "\n")
 	}
 
 	return output.String(), nil
@@ -444,12 +501,12 @@ func submitTemplateResultsToAPI(
 	var packages []scan.InstalledPackage
 	if agentInfo.ScriptingEnabled || runtime.GOOS != "windows" {
 		agentInfo.Logger.Debug("Collecting software packages for enhanced reporting")
-		
+
 		// Create a minimal ScanResult for package gathering
 		scanResult := &scan.ScanResult{
 			ScanErrors: make([]string, 0),
 		}
-		
+
 		// Use the platform-specific package gathering
 		switch runtime.GOOS {
 		case "linux":
@@ -461,7 +518,7 @@ func submitTemplateResultsToAPI(
 				packages, _ = scan.GatherWindowsPackages(ctx, agentInfo, scanResult)
 			}
 		}
-		
+
 		if len(packages) > 0 {
 			agentInfo.Logger.Debug("Collected software packages",
 				zap.Int("package_count", len(packages)))
