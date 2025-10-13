@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/SiriusScan/app-agent/internal/commands"
-	"github.com/SiriusScan/app-agent/internal/commands/scan" // For package enumeration
+	"github.com/SiriusScan/app-agent/internal/commands/scan"         // For package enumeration
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register module
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"    // Register module
 	"github.com/SiriusScan/app-agent/internal/template/executor"
@@ -476,18 +476,54 @@ func submitTemplateResultsToAPI(
 	// 4. Build sirius.Host data
 	hostData := reporting.BuildHostData(fp, vulns)
 
-	// 5. Add software inventory if we collected packages
-	// Note: This would go into the enhanced API call if we had it
-	// For now, we'll just include it in agent_metadata
+	// 5. Build software inventory (if we have packages)
+	var softwareInventory map[string]interface{}
+	if len(packages) > 0 {
+		// Convert packages to the expected format
+		packageList := make([]map[string]interface{}, 0, len(packages))
+		for _, pkg := range packages {
+			packageList = append(packageList, map[string]interface{}{
+				"name":    pkg.Name,
+				"version": pkg.Version,
+				"source":  pkg.Source,
+			})
+		}
+
+		softwareInventory = map[string]interface{}{
+			"packages":      packageList,
+			"package_count": len(packages),
+			"collected_at":  time.Now().Format(time.RFC3339),
+			"source":        "sirius-agent",
+		}
+
+		agentInfo.Logger.Debug("Built software inventory",
+			zap.Int("package_count", len(packages)))
+	}
+
+	// 6. Build agent metadata
 	agentMetadata := reporting.BuildAgentMetadata(results, executionTime)
 	if len(packages) > 0 {
 		agentMetadata["package_count"] = len(packages)
 		agentMetadata["has_software_inventory"] = true
 	}
 
-	// 6. Submit to API
+	// 7. Submit to API with enhanced data
 	apiCtx := context.Background() // Use background context for async call
-	err = agentInfo.APIClient.UpdateHostRecord(apiCtx, agentInfo.Config.ApiBaseURL, hostData)
+
+	// Use enhanced API if we have JSONB data to send
+	if len(softwareInventory) > 0 || len(agentMetadata) > 0 {
+		err = agentInfo.APIClient.UpdateHostRecordWithEnhancedData(
+			apiCtx,
+			agentInfo.Config.ApiBaseURL,
+			hostData,
+			softwareInventory,
+			nil, // systemFingerprint (not collected yet)
+			agentMetadata,
+		)
+	} else {
+		// Fallback to basic API
+		err = agentInfo.APIClient.UpdateHostRecord(apiCtx, agentInfo.Config.ApiBaseURL, hostData)
+	}
 
 	submissionTime := time.Since(startTime)
 
@@ -495,10 +531,13 @@ func submitTemplateResultsToAPI(
 		agentInfo.Logger.Error("Failed to submit template results to API",
 			zap.Error(err),
 			zap.Duration("submission_time", submissionTime),
-			zap.Int("vulnerabilities", len(vulns)))
+			zap.Int("vulnerabilities", len(vulns)),
+			zap.Int("packages", len(packages)))
 	} else {
 		agentInfo.Logger.Info("Successfully submitted template results to API",
 			zap.Int("vulnerabilities", len(vulns)),
+			zap.Int("packages", len(packages)),
+			zap.Bool("enhanced_data", len(softwareInventory) > 0 || len(agentMetadata) > 0),
 			zap.Duration("submission_time", submissionTime),
 			zap.String("host_id", agentInfo.Config.HostID),
 			zap.String("agent_id", agentInfo.Config.AgentID))

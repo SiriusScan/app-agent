@@ -26,6 +26,8 @@ type AgentInfo struct {
 // This allows mocking the API client for command testing.
 type APIClient interface {
 	UpdateHostRecord(ctx context.Context, apiBaseURL string, hostData sirius.Host) error
+	UpdateHostRecordWithEnhancedData(ctx context.Context, apiBaseURL string, hostData sirius.Host,
+		softwareInventory, systemFingerprint, agentMetadata map[string]interface{}) error
 }
 
 // --- Default API Client Implementation ---
@@ -46,6 +48,12 @@ func NewAPIClientAdapter() APIClient {
 func (a *apiClientAdapter) UpdateHostRecord(ctx context.Context, apiBaseURL string, hostData sirius.Host) error {
 	// Call the actual function from the apiclient package
 	return apiclient.UpdateHostRecord(ctx, apiBaseURL, hostData)
+}
+
+// UpdateHostRecordWithEnhancedData delegates to apiclient.UpdateHostRecordWithEnhancedData.
+func (a *apiClientAdapter) UpdateHostRecordWithEnhancedData(ctx context.Context, apiBaseURL string, hostData sirius.Host,
+	softwareInventory, systemFingerprint, agentMetadata map[string]interface{}) error {
+	return apiclient.UpdateHostRecordWithEnhancedData(ctx, apiBaseURL, hostData, softwareInventory, systemFingerprint, agentMetadata)
 }
 
 // --- End Default API Client Implementation ---

@@ -6,7 +6,7 @@ toolchain go1.24.1
 
 require (
 	github.com/SiriusScan/go-api v0.0.10
-	github.com/rabbitmq/amqp091-go v1.10.0
+	github.com/spf13/cobra v1.10.1
 	go.uber.org/zap v1.27.0
 	google.golang.org/grpc v1.71.1
 	google.golang.org/protobuf v1.36.6
@@ -15,7 +15,8 @@ require (
 
 require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
-	github.com/spf13/cobra v1.10.1 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/streadway/amqp v1.1.0 // indirect
 	github.com/valkey-io/valkey-go v1.0.60 // indirect
@@ -24,6 +25,7 @@ require (
 	golang.org/x/sys v0.32.0 // indirect
 	golang.org/x/text v0.24.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250414145226-207652e42e2e // indirect
+	gorm.io/gorm v1.25.12 // indirect
 )
 
 // replace github.com/SiriusScan/go-api => ../go-api
