@@ -1,0 +1,145 @@
+# Overview
+
+The SiriusScan Agent Manager is designed as the central coordination component of the SiriusScan vulnerability scanning ecosystem. It addresses the challenge of managing and orchestrating distributed agents that perform authenticated, local system scans across an organization's infrastructure. Targeted towards cybersecurity professionals and infrastructure security teams, the Agent Manager enables centralized control of remote agents, task distribution, and result aggregation using RabbitMQ for UI communication, gRPC for agent communication, and Valkey for state management.
+
+# Core Features
+
+### 1. RabbitMQ Command Reception
+- **What it does:** Listens for task commands from the UI via RabbitMQ.
+- **Why it's important:** Provides a standardized interface for UI-driven task initiation and control.
+- **How it works:** Utilizes the Sirius Go API (`queue.Listen`) to receive task commands and store them in Valkey.
+
+### 2. gRPC-based Agent Management
+- **What it does:** Manages connections from remote agents and distributes tasks.
+- **Why it's important:** Ensures secure, reliable communication with authenticated agents.
+- **How it works:** Provides a gRPC service that agents connect to, with streaming RPCs for command distribution.
+
+### 3. Valkey State Management
+- **What it does:** Persistently stores task states, agent information, and execution results.
+- **Why it's important:** Provides reliable task tracking and result storage accessible by the UI.
+- **How it works:** Leverages the Sirius Go API (`store.KVStore`) to store task details, agent states, and command results.
+
+# User Experience
+
+### User Personas
+- **Security Analysts:** Need to execute authenticated scans across multiple systems.
+- **System Administrators:** Require visibility into agent status and task execution.
+
+### Key User Flows
+1. Analyst triggers task from central UI.
+2. UI sends RabbitMQ task command to Agent Manager.
+3. Agent Manager selects appropriate agent and sends command via gRPC.
+4. Agent executes command locally and reports results.
+5. Results are stored in Valkey for UI retrieval.
+
+### UI/UX Considerations
+- Real-time agent status visibility.
+- Clear task execution tracking.
+- Efficient result retrieval and presentation.
+
+# Technical Architecture
+
+### System Components
+- **RabbitMQ Listener:** Receives commands from UI.
+- **gRPC Server:** Manages agent connections and command distribution.
+- **Agent Registry:** Tracks connected agents and their capabilities.
+- **Command Processor:** Routes tasks to appropriate agents.
+- **Result Processor:** Handles and stores command execution results.
+- **Valkey Store:** Persistent storage for tasks, agent states, and results.
+
+### Data Models
+- **Task:**
+  - ID, Type, Args, Target Agent, Status, Timestamps
+- **Agent:**
+  - ID, Hostname, Platform, Capabilities, Connection Status
+- **Result:**
+  - Task ID, Agent ID, Output, Status, Metadata, Timestamp
+
+### APIs and Integrations
+- **UI Integration:** RabbitMQ via Sirius Go API (`queue` package)
+- **Agent Communication:** gRPC service with streaming commands
+- **State Storage:** Valkey via Sirius Go API (`store` package)
+
+### Infrastructure Requirements
+- Environment variables for configuration:
+  - `SIRIUS_RABBITMQ`: RabbitMQ connection URL
+  - `SIRIUS_VALKEY`: Valkey store connection URL
+  - `GRPC_SERVER_ADDR`: Address to bind gRPC server
+  - `GRPC_SERVER_TLS`: TLS configuration for gRPC (optional)
+
+# Development Roadmap
+
+### MVP Requirements
+- RabbitMQ task reception from UI
+- Basic gRPC server for agent connections
+- Command distribution to specific agents
+- Result storage in Valkey
+- Basic agent authentication
+
+### Future Enhancements
+- Advanced agent authentication and authorization
+- Load balancing across multiple agents
+- Agent capability discovery and matching
+- Enhanced monitoring and metrics
+- Agent health checking and recovery
+
+# Logical Dependency Chain
+
+1. **Foundation:**
+   - RabbitMQ listener for UI commands
+   - gRPC server setup
+   - Valkey store initialization
+
+2. **Core Agent Management:**
+   - Agent authentication
+   - Command streaming
+   - Result processing
+
+3. **Task Processing:**
+   - Command validation
+   - Agent selection
+   - Result storage
+
+4. **Reliability:**
+   - Connection management
+   - Error handling
+   - Recovery mechanisms
+
+5. **Advanced Features:**
+   - Load balancing
+   - Health monitoring
+   - Metrics collection
+
+# Risks and Mitigations
+
+- **Security:**
+  - Risk: Unauthorized agent connections
+  - Mitigation: Robust authentication and TLS
+
+- **Reliability:**
+  - Risk: Agent disconnections during tasks
+  - Mitigation: Connection monitoring and task recovery
+
+- **Scalability:**
+  - Risk: High agent count impacting performance
+  - Mitigation: Efficient connection management and load balancing
+
+# Appendix
+
+### Command Types
+- **scan:** Execute local system scan
+- **execute:** Run specified command
+- **status:** Report agent status
+- **update:** Update agent configuration
+
+### Result Processing
+- Success/failure determination
+- Output parsing and storage
+- UI notification via Valkey
+
+### Security Considerations
+- Agent authentication methods
+- TLS configuration
+- Command validation
+- Result integrity verification
+

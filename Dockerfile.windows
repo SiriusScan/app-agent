@@ -1,0 +1,52 @@
+# Use Windows Server Core as base image
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+# Set working directory
+WORKDIR C:\\app-agent
+
+# Install PowerShell 7.x for modern PowerShell capabilities
+ADD https://github.com/PowerShell/PowerShell/releases/download/v7.4.0/PowerShell-7.4.0-win-x64.msi C:\\temp\\PowerShell.msi
+RUN msiexec.exe /i C:\\temp\\PowerShell.msi /quiet /norestart
+
+# Add PowerShell to PATH
+RUN setx PATH "%PATH%;C:\\Program Files\\PowerShell\\7"
+
+# Install Go 1.21 for building the agent
+ADD https://go.dev/dl/go1.21.5.windows-amd64.msi C:\\temp\\go.msi
+RUN msiexec.exe /i C:\\temp\\go.msi /quiet /norestart
+
+# Add Go to PATH
+RUN setx PATH "%PATH%;C:\\Program Files\\Go\\bin"
+
+# Copy Go modules first for better layer caching
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the agent for Windows
+RUN go build -o agent.exe .
+
+# Create necessary directories
+RUN mkdir templates\\hash-based templates\\registry-based templates\\config-based
+
+# Copy templates
+COPY templates/ templates/
+
+# Create a simple registry test key for testing
+RUN reg add "HKLM\\SOFTWARE\\SiriusTest" /v "TestValue" /t REG_SZ /d "VulnerableVersion1.0" /f
+
+# Set up Windows-specific environment
+ENV GOOS=windows
+ENV GOARCH=amd64
+
+# Expose agent ports (if needed)
+EXPOSE 50051
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD powershell -Command "try { Get-Service -Name 'Winmgmt' -ErrorAction Stop; exit 0 } catch { exit 1 }"
+
+# Default command
+CMD ["C:\\app-agent\\agent.exe", "server"] 

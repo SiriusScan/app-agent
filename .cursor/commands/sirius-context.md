@@ -1,0 +1,1 @@
+@project/ @README.documentation-index.md @ABOUT.documentation.md @README.new-project.md @architecture/ @README.git-operations.md 

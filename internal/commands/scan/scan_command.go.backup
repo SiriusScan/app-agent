@@ -1,0 +1,1099 @@
+package scan
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"time"
+
+	"github.com/SiriusScan/app-agent/internal/commands"
+	"github.com/SiriusScan/app-agent/internal/detect"
+	"github.com/SiriusScan/app-agent/internal/detect/template"
+	"github.com/SiriusScan/app-agent/internal/fingerprint"
+	"github.com/SiriusScan/app-agent/internal/shell"
+	"github.com/SiriusScan/app-agent/internal/sysinfo"
+	"github.com/SiriusScan/go-api/sirius"
+	"go.uber.org/zap"
+)
+
+// ScanCommand implements the internal scan command.
+type ScanCommand struct{}
+
+// Ensures ScanCommand implements the Command interface at compile time.
+var _ commands.Command = (*ScanCommand)(nil)
+
+func init() {
+	// Register this command with the prefix "scan" for user-friendly terminal access
+	commands.Register("scan", &ScanCommand{})
+}
+
+// Execute gathers system inventory based on arguments and OS, returning results as JSON.
+func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo, commandString string, args string) (output string, err error) {
+	agentInfo.Logger.Info("Executing internal scan command", zap.String("raw_args", args))
+
+	result := ScanResult{
+		OSInfo: OSInfo{
+			OS:        runtime.GOOS,
+			Version:   sysinfo.GetOSVersion(),
+			Hostname:  agentInfo.Config.AgentID, // Use agent ID as hostname for now
+			PrimaryIP: sysinfo.GetPrimaryIP(),
+		},
+		Packages:      make([]InstalledPackage, 0),
+		CustomResults: make(map[string]CustomScanOutput),
+		ScanErrors:    make([]string, 0),
+	}
+
+	// --- Argument Parsing ---
+	scanPackages := true    // Default: Scan packages
+	scanFingerprint := true // Default: Enable fingerprinting for comprehensive system info
+	scanTemplates := true   // Default: Enable template-based vulnerability detection
+	scanVerbose := false    // NEW: Verbose output with full details
+	scanFull := false       // NEW: Full detailed output including all packages
+	scanCustomScripts := []string{}
+	scriptsFlagFound := false // Track if --scripts was explicitly used
+
+	agentInfo.Logger.Debug("Raw args string for parsing", zap.String("args", args))
+	argsList := strings.Fields(args) // Split args by space
+	agentInfo.Logger.Debug("Args split by space", zap.Strings("argsList", argsList))
+	for _, arg := range argsList {
+		if strings.HasPrefix(arg, "--scripts=") {
+			scriptsFlagFound = true // Mark that the flag was found
+			scriptNames := strings.TrimPrefix(arg, "--scripts=")
+			if scriptNames != "" {
+				scanCustomScripts = strings.Split(scriptNames, ",")
+				// Trim whitespace from each script name
+				for i := range scanCustomScripts {
+					scanCustomScripts[i] = strings.TrimSpace(scanCustomScripts[i])
+				}
+			}
+		} else if arg == "--fingerprint" {
+			scanFingerprint = true
+			agentInfo.Logger.Info("System fingerprinting explicitly enabled via --fingerprint flag")
+		} else if arg == "--templates" || arg == "--template" {
+			scanTemplates = true
+			agentInfo.Logger.Info("Template-based vulnerability detection enabled via --templates flag")
+		} else if arg == "--verbose" || arg == "-v" {
+			scanVerbose = true
+			agentInfo.Logger.Info("Verbose output enabled via --verbose flag")
+		} else if arg == "--full" {
+			scanFull = true
+			agentInfo.Logger.Info("Full detailed output enabled via --full flag")
+		}
+		// TODO: Add flags for modules, e.g., --modules=packages,patches or --modules=none
+		// Example: else if arg == "--modules=none" { scanPackages = false }
+	}
+
+	// If --scripts was explicitly provided, disable the default package scan
+	// (unless other flags like --modules=packages modify this later)
+	if scriptsFlagFound {
+		scanPackages = false
+		// TODO: If --modules=packages is *also* specified, re-enable scanPackages here.
+	}
+
+	// If --templates was explicitly provided, disable the default package scan
+	// and enable fingerprinting to show system info
+	if scanTemplates {
+		scanPackages = true    // Still collect packages for statistics
+		scanFingerprint = true // Show system info with template results
+		agentInfo.Logger.Info("Template mode: packages collected for statistics only, system fingerprinting enabled (certificates excluded)")
+	}
+
+	agentInfo.Logger.Debug("Scan arguments parsed",
+		zap.Bool("scanPackages", scanPackages),
+		zap.Bool("scanFingerprint", scanFingerprint),
+		zap.Bool("scanTemplates", scanTemplates),
+		zap.Bool("scanVerbose", scanVerbose),
+		zap.Bool("scanFull", scanFull),
+		zap.Strings("final_scanCustomScripts", scanCustomScripts))
+
+	// --- OS Specific Logic ---
+	if scanPackages {
+		// Gather basic packages for backward compatibility
+		pkgs, err := c.gatherPlatformPackages(ctx, agentInfo, &result)
+		if err != nil {
+			agentInfo.Logger.Error("Error gathering packages", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Package gathering failed: %v", err))
+		} else {
+			result.Packages = pkgs
+		}
+
+		// Also gather enhanced packages with metadata
+		enhancedPkgs, enhancedErr := c.gatherEnhancedPlatformPackages(ctx, agentInfo, &result)
+		if enhancedErr != nil {
+			agentInfo.Logger.Warn("Error gathering enhanced packages, falling back to basic packages only", zap.Error(enhancedErr))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Enhanced package gathering failed: %v", enhancedErr))
+
+			// Convert basic packages to enhanced format as fallback
+			if len(pkgs) > 0 {
+				result.EnhancedPackages = make([]EnhancedPackageInfo, len(pkgs))
+				for i, pkg := range pkgs {
+					result.EnhancedPackages[i] = FromInstalledPackage(pkg)
+				}
+			}
+		} else {
+			result.EnhancedPackages = enhancedPkgs
+			agentInfo.Logger.Info("Successfully gathered enhanced packages",
+				zap.Int("enhanced_count", len(enhancedPkgs)),
+				zap.Int("basic_count", len(pkgs)))
+		}
+	}
+
+	// --- System Fingerprinting ---
+	if scanFingerprint {
+		agentInfo.Logger.Info("Starting lightweight system fingerprinting collection")
+
+		// Create collectors
+		hardwareCollector := &fingerprint.SystemHardwareCollector{}
+		networkCollector := fingerprint.NewNetworkConfigCollector()
+		fingerprintStartTime := time.Now()
+
+		// Collect system fingerprint
+		systemInfo, err := hardwareCollector.GetSystemInfo(ctx)
+		if err != nil {
+			agentInfo.Logger.Error("Error collecting system info", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("System info collection failed: %v", err))
+		}
+
+		// Collect hardware info
+		hardwareInfo, err := hardwareCollector.GetCPUInfo(ctx)
+		if err != nil {
+			agentInfo.Logger.Error("Error collecting CPU info", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("CPU info collection failed: %v", err))
+		}
+
+		memoryInfo, err := hardwareCollector.GetMemoryInfo(ctx)
+		if err != nil {
+			agentInfo.Logger.Error("Error collecting memory info", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Memory info collection failed: %v", err))
+		}
+
+		storageInfo, err := hardwareCollector.GetStorageInfo(ctx)
+		if err != nil {
+			agentInfo.Logger.Error("Error collecting storage info", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Storage info collection failed: %v", err))
+		}
+
+		// Collect network configuration
+		networkConfig, err := networkCollector.GetNetworkConfiguration(ctx)
+		if err != nil {
+			agentInfo.Logger.Error("Error collecting network configuration", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Network configuration collection failed: %v", err))
+		}
+
+		// --- Enhanced Security Fingerprinting ---
+		// Create enhanced security collectors
+		serviceCollector := fingerprint.NewServiceCollector(agentInfo.Logger)
+		portCollector := fingerprint.NewPortCollector(agentInfo.Logger)
+		userCollector := fingerprint.NewUserCollector(agentInfo.Logger)
+
+		// Collect running services
+		var runningServices []*fingerprint.ServiceDetails
+		if services, err := serviceCollector.GetRunningServices(ctx); err != nil {
+			agentInfo.Logger.Error("Error collecting running services", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Service collection failed: %v", err))
+		} else {
+			runningServices = services
+			agentInfo.Logger.Info("Service collection completed", zap.Int("services_found", len(services)))
+		}
+
+		// Collect open ports and connections
+		var networkConnections []*fingerprint.NetworkConnection
+		if connections, err := portCollector.CollectOpenPorts(ctx); err != nil {
+			agentInfo.Logger.Error("Error collecting network connections", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Port collection failed: %v", err))
+		} else {
+			networkConnections = connections
+			agentInfo.Logger.Info("Port collection completed", zap.Int("connections_found", len(connections)))
+		}
+
+		// Collect user accounts and groups
+		var localUsers []*fingerprint.UserAccount
+		var localGroups []*fingerprint.UserGroup
+		var currentUserPrivileges *fingerprint.UserPrivileges
+		var loginSessions []*fingerprint.LoginSession
+
+		if users, err := userCollector.GetLocalUsers(ctx); err != nil {
+			agentInfo.Logger.Error("Error collecting local users", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("User collection failed: %v", err))
+		} else {
+			localUsers = users
+			agentInfo.Logger.Info("User collection completed", zap.Int("users_found", len(users)))
+		}
+
+		if groups, err := userCollector.GetLocalGroups(ctx); err != nil {
+			agentInfo.Logger.Error("Error collecting local groups", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Group collection failed: %v", err))
+		} else {
+			localGroups = groups
+			agentInfo.Logger.Info("Group collection completed", zap.Int("groups_found", len(groups)))
+		}
+
+		if privileges, err := userCollector.GetCurrentUserPrivileges(ctx); err != nil {
+			agentInfo.Logger.Error("Error collecting current user privileges", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Privilege collection failed: %v", err))
+		} else {
+			currentUserPrivileges = privileges
+			agentInfo.Logger.Info("Privilege collection completed", zap.String("username", privileges.Username), zap.Bool("is_admin", privileges.IsAdmin))
+		}
+
+		if sessions, err := userCollector.GetLoginSessions(ctx); err != nil {
+			agentInfo.Logger.Error("Error collecting login sessions", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Session collection failed: %v", err))
+		} else {
+			loginSessions = sessions
+			agentInfo.Logger.Info("Session collection completed", zap.Int("sessions_found", len(sessions)))
+		}
+
+		fingerprintEndTime := time.Now()
+		collectionDuration := fingerprintEndTime.Sub(fingerprintStartTime)
+
+		// Build comprehensive system fingerprint with enhanced security data
+		if systemInfo != nil || hardwareInfo != nil || memoryInfo != nil || len(storageInfo) > 0 || networkConfig != nil ||
+			len(runningServices) > 0 || len(networkConnections) > 0 || len(localUsers) > 0 || len(localGroups) > 0 {
+
+			// Build network info with connections
+			networkInfo := &fingerprint.NetworkInfo{
+				Interfaces:  convertNetworkInterfaces(networkConfig),
+				Routes:      convertRouteEntries(networkConfig),
+				DNS:         convertDNSConfig(networkConfig),
+				Connections: networkConnections,
+				CollectedAt: fingerprintStartTime,
+			}
+
+			// Build user info
+			var userInfo *fingerprint.UserInfo
+			if len(localUsers) > 0 || len(localGroups) > 0 || currentUserPrivileges != nil || len(loginSessions) > 0 {
+				userInfo = &fingerprint.UserInfo{
+					Users:         localUsers,
+					Groups:        localGroups,
+					CurrentUser:   currentUserPrivileges,
+					LoginSessions: loginSessions,
+					CollectedAt:   fingerprintStartTime,
+				}
+			}
+
+			// Build service info
+			var serviceInfo *fingerprint.ServiceInfo
+			if len(runningServices) > 0 {
+				serviceInfo = &fingerprint.ServiceInfo{
+					Services:    runningServices,
+					CollectedAt: fingerprintStartTime,
+				}
+			}
+
+			result.SystemFingerprint = &fingerprint.SystemFingerprint{
+				CollectedAt: fingerprintStartTime,
+				Platform:    fingerprint.Platform(runtime.GOOS),
+				Hardware: &fingerprint.HardwareInfo{
+					CPU:         hardwareInfo,
+					Memory:      memoryInfo,
+					Storage:     storageInfo,
+					System:      systemInfo,
+					CollectedAt: fingerprintStartTime,
+				},
+				Network:            networkInfo,
+				Users:              userInfo,
+				Services:           serviceInfo,
+				CollectionDuration: collectionDuration,
+			}
+
+			agentInfo.Logger.Info("Enhanced system fingerprinting completed successfully",
+				zap.Bool("hasCPU", hardwareInfo != nil),
+				zap.Bool("hasMemory", memoryInfo != nil),
+				zap.Int("storageDevices", len(storageInfo)),
+				zap.Bool("hasSystemInfo", systemInfo != nil),
+				zap.Bool("hasNetworkConfig", networkConfig != nil),
+				zap.Int("servicesFound", len(runningServices)),
+				zap.Int("connectionsFound", len(networkConnections)),
+				zap.Int("usersFound", len(localUsers)),
+				zap.Int("groupsFound", len(localGroups)),
+				zap.Bool("hasPrivileges", currentUserPrivileges != nil),
+				zap.Int("sessionsFound", len(loginSessions)),
+				zap.Duration("collectionDuration", collectionDuration))
+		}
+	}
+
+	// --- Template-Based Vulnerability Detection ---
+	if scanTemplates {
+		agentInfo.Logger.Info("Starting template-based vulnerability detection")
+
+		templateResults, templateErr := c.executeTemplateDetection(ctx, agentInfo, &result)
+		if templateErr != nil {
+			agentInfo.Logger.Error("Template detection failed", zap.Error(templateErr))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Template detection failed: %v", templateErr))
+			// Still include empty results to show that templates were attempted
+			if templateResults == nil {
+				result.TemplateDetectionResults = []TemplateDetectionResult{}
+			} else {
+				result.TemplateDetectionResults = templateResults
+			}
+		} else {
+			result.TemplateDetectionResults = templateResults
+			agentInfo.Logger.Info("Template detection completed",
+				zap.Int("templates_executed", len(templateResults)),
+				zap.Int("vulnerabilities_found", countVulnerableTemplates(templateResults)))
+
+			// Debug log each template result
+			for i, tmplResult := range templateResults {
+				agentInfo.Logger.Debug("Template result",
+					zap.Int("index", i),
+					zap.String("template_id", tmplResult.TemplateID),
+					zap.String("template_name", tmplResult.TemplateName),
+					zap.Bool("vulnerable", tmplResult.Vulnerable),
+					zap.Float64("confidence", tmplResult.Confidence),
+					zap.Int("evidence_count", len(tmplResult.Evidence)),
+					zap.String("error", tmplResult.Error))
+			}
+		}
+	}
+
+	// --- Custom Script Execution ---
+	if len(scanCustomScripts) > 0 {
+		agentInfo.Logger.Debug("Calling executeCustomScripts", zap.Strings("scripts", scanCustomScripts))
+		c.executeCustomScripts(ctx, agentInfo, &result, scanCustomScripts)
+	}
+
+	// --- Submit to API if we have meaningful data ---
+	// Check if we have sufficient enhanced data to warrant API submission
+	if len(result.EnhancedPackages) > 0 || result.SystemFingerprint != nil || len(result.TemplateDetectionResults) > 0 {
+		agentInfo.Logger.Info("Submitting scan data to API via source-aware endpoint")
+
+		// Convert scan result to sirius.Host with JSONB data
+		hostData, softwareInventory, systemFingerprint, agentMetadata, err := c.convertScanResultToHostWithJSONB(agentInfo, &result)
+		if err != nil {
+			agentInfo.Logger.Error("Failed to convert scan result to host data", zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Host data conversion failed: %v", err))
+		} else {
+			// Submit to API using enhanced source-aware endpoint
+			go func() {
+				// Check if APIClient is nil
+				if agentInfo.APIClient == nil {
+					agentInfo.Logger.Error("API client is not available for enhanced data submission")
+					return
+				}
+
+				apiCtx := context.Background()
+				err := agentInfo.APIClient.UpdateHostRecordWithEnhancedData(apiCtx, agentInfo.Config.ApiBaseURL, hostData, softwareInventory, systemFingerprint, agentMetadata)
+
+				if err != nil {
+					agentInfo.Logger.Error("Failed to update host record via enhanced API (from scan command)",
+						zap.String("host_id", agentInfo.Config.HostID),
+						zap.Error(err))
+				} else {
+					agentInfo.Logger.Info("Successfully updated host record via enhanced API (from scan command)",
+						zap.String("host_id", agentInfo.Config.HostID),
+						zap.Int("enhanced_packages", len(result.EnhancedPackages)),
+						zap.Bool("has_fingerprint", result.SystemFingerprint != nil))
+				}
+			}()
+		}
+	} else {
+		agentInfo.Logger.Debug("No enhanced data to submit, skipping API submission")
+		agentInfo.Logger.Info("Skipping API submission - no meaningful enhanced data collected")
+	}
+
+	// --- Generate JSON Output ---
+	var jsonData []byte
+	var jsonErr error
+
+	if scanFull || scanVerbose {
+		// Generate full detailed output for --full or --verbose flags
+		jsonData, jsonErr = json.MarshalIndent(result, "", "  ")
+	} else {
+		// Generate summarized output by default (for regular scans and templates)
+		summaryResult := createScanSummaryResult(&result)
+		jsonData, jsonErr = json.MarshalIndent(summaryResult, "", "  ")
+	}
+
+	if jsonErr != nil {
+		agentInfo.Logger.Error("Error marshaling scan result to JSON", zap.Error(jsonErr))
+		return "", fmt.Errorf("failed to marshal scan result: %w", jsonErr)
+	}
+
+	agentInfo.Logger.Info("Scan command completed successfully",
+		zap.Int("packages", len(result.Packages)),
+		zap.Int("enhanced_packages", len(result.EnhancedPackages)),
+		zap.Bool("has_fingerprint", result.SystemFingerprint != nil),
+		zap.Int("template_results", len(result.TemplateDetectionResults)),
+		zap.Int("custom_results", len(result.CustomResults)),
+		zap.Int("errors", len(result.ScanErrors)))
+
+	return string(jsonData), nil
+}
+
+// gatherPlatformPackages routes to the OS-specific package gathering function.
+func (c *ScanCommand) gatherPlatformPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
+	switch runtime.GOOS {
+	case "linux":
+		return gatherLinuxPackages(ctx, agentInfo, result)
+	case "windows":
+		return gatherWindowsPackages(ctx, agentInfo, result)
+	case "darwin":
+		return gatherMacOSPackages(ctx, agentInfo, result)
+	default:
+		msg := fmt.Sprintf("Package gathering not supported for OS: %s", runtime.GOOS)
+		result.ScanErrors = append(result.ScanErrors, msg)
+		return nil, fmt.Errorf(msg)
+	}
+}
+
+// executeCustomScripts handles locating, reading, and executing custom scripts.
+func (c *ScanCommand) executeCustomScripts(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult, scriptNames []string) {
+	agentInfo.Logger.Debug("Entered executeCustomScripts", zap.Strings("scriptNames", scriptNames))
+	scriptBaseDir := getScriptBaseDir() // Get base directory based on OS
+	if scriptBaseDir == "" {
+		result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Custom script execution not supported for OS: %s", runtime.GOOS))
+		return
+	}
+
+	for _, scriptName := range scriptNames {
+		if scriptName == "" {
+			continue
+		}
+		scriptPath := filepath.Join(scriptBaseDir, scriptName)
+		agentInfo.Logger.Debug("Processing custom script", zap.String("name", scriptName), zap.String("path", scriptPath))
+
+		scriptContentBytes, err := os.ReadFile(scriptPath)
+		if err != nil {
+			errMsg := fmt.Sprintf("Failed to read custom script file '%s': %v", scriptPath, err)
+			agentInfo.Logger.Error("Custom script read error", zap.String("script", scriptName), zap.Error(err))
+			result.ScanErrors = append(result.ScanErrors, errMsg)
+			// Store error in results for this script
+			result.CustomResults[scriptName] = CustomScanOutput{
+				ScriptName: scriptName,
+				Error:      errMsg,
+				ExitCode:   -1, // Indicate agent-level error
+			}
+			continue // Move to next script
+		}
+		scriptContent := string(scriptContentBytes)
+
+		var stdout, stderr string
+		var exitCode int
+		var execErr error
+
+		switch runtime.GOOS {
+		case "windows":
+			if agentInfo.ScriptingEnabled {
+				stdout, stderr, exitCode, execErr = shell.ExecuteScript(ctx, agentInfo.PowerShellPath, scriptContent)
+			} else {
+				execErr = errors.New("powershell scripting disabled")
+				exitCode = -1
+			}
+		// TODO: Add Linux/macOS execution (e.g., using bash -c or sh -c)
+		// case "linux":
+		// 	 stdout, stderr, exitCode, execErr = executeBashScript(ctx, scriptContent)
+		// case "darwin":
+		// 	 stdout, stderr, exitCode, execErr = executeBashScript(ctx, scriptContent)
+		default:
+			execErr = fmt.Errorf("custom script execution not implemented for OS: %s", runtime.GOOS)
+			exitCode = -1
+		}
+
+		// Store results
+		customResult := CustomScanOutput{
+			ScriptName: scriptName,
+			StdOut:     stdout,
+			StdErr:     stderr,
+			ExitCode:   exitCode,
+		}
+		if execErr != nil {
+			// Check if the error is just a non-zero exit code
+			var exitErr *exec.ExitError
+			if errors.As(execErr, &exitErr) {
+				// It's just a non-zero exit, not an execution failure.
+				// Log it but don't treat as a scan error or populate the Error field.
+				agentInfo.Logger.Info("Custom script finished with non-zero exit code",
+					zap.String("script", scriptName),
+					zap.Int("exitCode", exitCode),
+					zap.String("stderr", stderr))
+			} else {
+				// Different error occurred (e.g., process start failed)
+				customResult.Error = execErr.Error()
+				agentInfo.Logger.Error("Custom script execution error", zap.String("script", scriptName), zap.Error(execErr), zap.Int("exitCode", exitCode))
+				// Also add to main scan errors for visibility
+				result.ScanErrors = append(result.ScanErrors, fmt.Sprintf("Error executing custom script '%s': %v", scriptName, execErr))
+			}
+		} else {
+			agentInfo.Logger.Info("Custom script executed successfully", zap.String("script", scriptName), zap.Int("exitCode", exitCode))
+		}
+		result.CustomResults[scriptName] = customResult
+	}
+}
+
+// getScriptBaseDir returns the expected base directory for scan scripts based on OS.
+func getScriptBaseDir() string {
+	// Assuming scripts are deployed relative to the agent executable
+	exePath, err := os.Executable()
+	if err != nil {
+		return "" // Cannot determine executable path
+	}
+	exeDir := filepath.Dir(exePath)
+
+	switch runtime.GOOS {
+	case "windows":
+		return filepath.Join(exeDir, "scripts", "powershell", "windows")
+	case "linux":
+		return filepath.Join(exeDir, "scripts", "bash", "linux") // Placeholder
+	case "darwin":
+		return filepath.Join(exeDir, "scripts", "bash", "macos") // Placeholder
+	default:
+		return ""
+	}
+}
+
+// Placeholder functions for OS-specific implementations (to be moved to separate files)
+/*
+func gatherLinuxPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
+	// Implementation for Linux
+	return nil, nil
+}
+
+func gatherWindowsPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
+	// Implementation for Windows
+	return nil, nil
+}
+
+func gatherMacOSPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
+	// Implementation for macOS
+	return nil, nil
+}
+*/
+
+// convertNetworkInterfaces converts NetworkConfiguration interfaces to NetworkInfo interfaces
+func convertNetworkInterfaces(config *fingerprint.NetworkConfiguration) []*fingerprint.NetworkInterface {
+	if config == nil {
+		return nil
+	}
+
+	interfaces := make([]*fingerprint.NetworkInterface, len(config.Interfaces))
+	for i, iface := range config.Interfaces {
+		interfaces[i] = &fingerprint.NetworkInterface{
+			Name:          iface.Name,
+			DisplayName:   iface.DisplayName,
+			MACAddress:    iface.MACAddress,
+			IPv4Addresses: iface.IPv4Addresses,
+			IPv6Addresses: iface.IPv6Addresses,
+			State:         iface.State,
+			Type:          iface.Type,
+			Speed:         iface.Speed,
+			MTU:           iface.MTU,
+			Statistics:    iface.Statistics,
+		}
+	}
+	return interfaces
+}
+
+// convertRouteEntries converts NetworkConfiguration routing table to RouteEntry slice
+func convertRouteEntries(config *fingerprint.NetworkConfiguration) []*fingerprint.RouteEntry {
+	if config == nil {
+		return nil
+	}
+
+	routes := make([]*fingerprint.RouteEntry, len(config.RoutingTable))
+	for i, route := range config.RoutingTable {
+		routes[i] = &fingerprint.RouteEntry{
+			Destination: route.Destination,
+			Gateway:     route.Gateway,
+			Interface:   route.Interface,
+			Metric:      route.Metric,
+			Type:        route.Type,
+		}
+	}
+	return routes
+}
+
+// convertDNSConfig converts NetworkConfiguration DNS servers to DNSConfig
+func convertDNSConfig(config *fingerprint.NetworkConfiguration) *fingerprint.DNSConfig {
+	if config == nil || len(config.DNSServers) == 0 {
+		return nil
+	}
+
+	return &fingerprint.DNSConfig{
+		Servers: config.DNSServers,
+	}
+}
+
+// gatherEnhancedPlatformPackages routes to the OS-specific enhanced package gathering function.
+func (c *ScanCommand) gatherEnhancedPlatformPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]EnhancedPackageInfo, error) {
+	switch runtime.GOOS {
+	case "linux":
+		return gatherEnhancedLinuxPackages(ctx, agentInfo, result)
+	case "windows":
+		return gatherEnhancedWindowsPackages(ctx, agentInfo, result)
+	case "darwin":
+		return gatherEnhancedMacOSPackages(ctx, agentInfo, result)
+	default:
+		msg := fmt.Sprintf("Enhanced package gathering not supported for OS: %s", runtime.GOOS)
+		result.ScanErrors = append(result.ScanErrors, msg)
+		return nil, fmt.Errorf(msg)
+	}
+}
+
+// convertScanResultToHostWithJSONB converts a ScanResult to a sirius.Host with separated JSONB data
+func (c *ScanCommand) convertScanResultToHostWithJSONB(agentInfo commands.AgentInfo, result *ScanResult) (sirius.Host, map[string]interface{}, map[string]interface{}, map[string]interface{}, error) {
+	host := sirius.Host{
+		HID:       agentInfo.Config.HostID,
+		OS:        result.OSInfo.OS,
+		OSVersion: result.OSInfo.Version,
+		IP:        result.OSInfo.PrimaryIP,
+		Hostname:  result.OSInfo.Hostname,
+	}
+
+	// Prepare JSONB data structures
+	softwareInventory := make(map[string]interface{})
+	systemFingerprint := make(map[string]interface{})
+	agentMetadata := make(map[string]interface{})
+
+	// Populate software inventory from enhanced packages
+	if len(result.EnhancedPackages) > 0 {
+		softwareInventory["packages"] = result.EnhancedPackages
+		softwareInventory["package_count"] = len(result.EnhancedPackages)
+		softwareInventory["collected_at"] = time.Now().UTC()
+		softwareInventory["source"] = "sirius-agent"
+
+		// Add package statistics
+		stats := make(map[string]interface{})
+		architectures := make(map[string]int)
+		publishers := make(map[string]int)
+
+		for _, pkg := range result.EnhancedPackages {
+			if pkg.Architecture != "" {
+				architectures[pkg.Architecture]++
+			}
+			if pkg.Publisher != "" {
+				publishers[pkg.Publisher]++
+			}
+		}
+
+		stats["architectures"] = architectures
+		stats["publishers"] = publishers
+		softwareInventory["statistics"] = stats
+	}
+
+	// Populate system fingerprint
+	if result.SystemFingerprint != nil {
+		systemFingerprint["fingerprint"] = result.SystemFingerprint
+		systemFingerprint["collected_at"] = time.Now().UTC()
+		systemFingerprint["source"] = "sirius-agent"
+		systemFingerprint["platform"] = result.SystemFingerprint.Platform
+		systemFingerprint["collection_duration_ms"] = result.SystemFingerprint.CollectionDuration.Milliseconds()
+
+		// Add summary information
+		summary := make(map[string]interface{})
+		if result.SystemFingerprint.Hardware != nil {
+			summary["has_cpu_info"] = result.SystemFingerprint.Hardware.CPU != nil
+			summary["has_memory_info"] = result.SystemFingerprint.Hardware.Memory != nil
+			summary["storage_devices"] = len(result.SystemFingerprint.Hardware.Storage)
+			summary["has_system_info"] = result.SystemFingerprint.Hardware.System != nil
+		}
+		if result.SystemFingerprint.Network != nil {
+			summary["network_interfaces"] = len(result.SystemFingerprint.Network.Interfaces)
+			summary["routing_entries"] = len(result.SystemFingerprint.Network.Routes)
+			summary["has_dns_config"] = result.SystemFingerprint.Network.DNS != nil
+		}
+		systemFingerprint["summary"] = summary
+	}
+
+	// Populate agent metadata
+	agentMetadata["agent_id"] = agentInfo.Config.AgentID
+	agentMetadata["host_id"] = agentInfo.Config.HostID
+	agentMetadata["scan_timestamp"] = time.Now().UTC()
+	agentMetadata["agent_version"] = "1.0.0" // TODO: Get from build info
+	agentMetadata["platform"] = runtime.GOOS
+	agentMetadata["architecture"] = runtime.GOARCH
+
+	// Add scan summary
+	scanSummary := make(map[string]interface{})
+	scanSummary["packages_collected"] = len(result.Packages)
+	scanSummary["enhanced_packages_collected"] = len(result.EnhancedPackages)
+	scanSummary["fingerprint_collected"] = result.SystemFingerprint != nil
+	scanSummary["custom_scripts_executed"] = len(result.CustomResults)
+	scanSummary["scan_errors"] = len(result.ScanErrors)
+	if len(result.ScanErrors) > 0 {
+		scanSummary["error_details"] = result.ScanErrors
+	}
+	agentMetadata["scan_summary"] = scanSummary
+
+	return host, softwareInventory, systemFingerprint, agentMetadata, nil
+}
+
+// convertScanResultToHost converts a ScanResult to a sirius.Host with populated JSONB fields
+func (c *ScanCommand) convertScanResultToHost(agentInfo commands.AgentInfo, result *ScanResult) (sirius.Host, error) {
+	host, _, _, _, err := c.convertScanResultToHostWithJSONB(agentInfo, result)
+	return host, err
+}
+
+// executeTemplateDetection performs template-based vulnerability detection
+func (c *ScanCommand) executeTemplateDetection(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]TemplateDetectionResult, error) {
+	agentInfo.Logger.Info("Initializing template-based vulnerability detection")
+
+	// Create context with timeout for entire template detection process
+	templateCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
+	// Get template directories (relative to agent executable)
+	templateDirs := c.getTemplateDirs()
+	agentInfo.Logger.Info("Template directories resolved", zap.Strings("template_dirs", templateDirs))
+
+	// Verify template directories exist and are accessible
+	accessibleDirs := make([]string, 0, len(templateDirs))
+	for _, templateDir := range templateDirs {
+		// Test directory access with timeout
+		dirTestCtx, dirCancel := context.WithTimeout(templateCtx, 10*time.Second)
+		accessible := make(chan bool, 1)
+
+		go func(dir string) {
+			if _, err := os.Stat(dir); err == nil {
+				accessible <- true
+			} else {
+				accessible <- false
+			}
+		}(templateDir)
+
+		select {
+		case isAccessible := <-accessible:
+			if isAccessible {
+				accessibleDirs = append(accessibleDirs, templateDir)
+				agentInfo.Logger.Info("Template directory accessible", zap.String("dir", templateDir))
+			} else {
+				agentInfo.Logger.Warn("Template directory not accessible", zap.String("dir", templateDir))
+			}
+		case <-dirTestCtx.Done():
+			agentInfo.Logger.Warn("Template directory access test timed out", zap.String("dir", templateDir))
+		}
+		dirCancel()
+	}
+
+	if len(accessibleDirs) == 0 {
+		agentInfo.Logger.Warn("No accessible template directories found", zap.Strings("attempted_dirs", templateDirs))
+		return []TemplateDetectionResult{}, nil
+	}
+
+	// Create template executor with accessible directories
+	executor := template.NewTemplateExecutor(agentInfo.Logger, accessibleDirs)
+	executor.SetTimeout(2 * time.Minute) // Set execution timeout
+
+	// Load templates with timeout protection
+	agentInfo.Logger.Info("Loading templates from accessible directories", zap.Strings("dirs", accessibleDirs))
+
+	// Create separate context for template loading
+	loadCtx, loadCancel := context.WithTimeout(templateCtx, 2*time.Minute)
+	defer loadCancel()
+
+	templates, err := executor.LoadTemplates(loadCtx)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load templates: %w", err)
+	}
+
+	if len(templates) == 0 {
+		agentInfo.Logger.Warn("No templates found for execution", zap.Strings("template_dirs", accessibleDirs))
+		return []TemplateDetectionResult{}, nil
+	}
+
+	agentInfo.Logger.Info("Templates loaded for execution",
+		zap.Int("total_templates", len(templates)),
+		zap.Strings("template_dirs", accessibleDirs))
+
+	// Execute templates with timeout protection
+	agentInfo.Logger.Info("Starting template execution phase")
+
+	// Create separate context for template execution
+	execCtx, execCancel := context.WithTimeout(templateCtx, 2*time.Minute)
+	defer execCancel()
+
+	detectionResults, err := executor.ExecuteTemplates(execCtx, templates)
+	if err != nil {
+		return nil, fmt.Errorf("template execution failed: %w", err)
+	}
+
+	agentInfo.Logger.Info("Template execution completed",
+		zap.Int("templates_executed", len(templates)),
+		zap.Int("results_generated", len(detectionResults)))
+
+	// Convert detection results to scan results format
+	scanResults := make([]TemplateDetectionResult, len(detectionResults))
+	for i, detectionResult := range detectionResults {
+		scanResults[i] = c.convertDetectionResult(detectionResult)
+	}
+
+	return scanResults, nil
+}
+
+// getTemplateDirs returns template directories relative to agent executable
+func (c *ScanCommand) getTemplateDirs() []string {
+	// For Windows, prioritize local paths and avoid network shares
+	if runtime.GOOS == "windows" {
+		// Check if we're in a problematic network environment
+		devTemplateDir := "/app-agent/templates"
+		if absPath, err := filepath.Abs(devTemplateDir); err == nil {
+			// Detect network paths (UNC paths starting with \\) and skip them
+			if strings.HasPrefix(absPath, `\\`) {
+				// Skip network paths and use local fallback
+			} else if _, err := os.Stat(devTemplateDir); err == nil {
+				return []string{devTemplateDir}
+			}
+		}
+
+		// Try current working directory first on Windows
+		if cwd, err := os.Getwd(); err == nil {
+			cwdTemplateDir := filepath.Join(cwd, "templates")
+			if absPath, err := filepath.Abs(cwdTemplateDir); err == nil {
+				// Only use if it's not a network path
+				if !strings.HasPrefix(absPath, `\\`) {
+					if _, err := os.Stat(cwdTemplateDir); err == nil {
+						return []string{cwdTemplateDir}
+					}
+				}
+			}
+		}
+
+		// Try relative to where agent is likely deployed
+		commonPaths := []string{
+			"templates",
+			"./templates",
+			"../templates",
+			"C:\\Program Files\\Sirius\\Agent\\templates",
+			"C:\\Sirius\\Agent\\templates",
+		}
+
+		for _, templatePath := range commonPaths {
+			if absPath, err := filepath.Abs(templatePath); err == nil {
+				// Only use local paths, avoid network shares
+				if !strings.HasPrefix(absPath, `\\`) {
+					if _, err := os.Stat(templatePath); err == nil {
+						return []string{absPath}
+					}
+				}
+			}
+		}
+
+		// Fallback: create an empty templates directory in current working directory
+		if cwd, err := os.Getwd(); err == nil {
+			templateDir := filepath.Join(cwd, "templates")
+			if absPath, err := filepath.Abs(templateDir); err == nil {
+				// Only use if it's not a network path
+				if !strings.HasPrefix(absPath, `\\`) {
+					os.MkdirAll(templateDir, 0755) // Create if it doesn't exist
+					return []string{templateDir}
+				}
+			}
+		}
+
+		// Ultimate fallback for Windows - use a safe local path
+		return []string{"templates"}
+	}
+
+	// For non-Windows systems, use the original logic
+	// First, try the development/source directory (for container development)
+	devTemplateDir := "/app-agent/templates"
+	if _, err := os.Stat(devTemplateDir); err == nil {
+		return []string{devTemplateDir}
+	}
+
+	// Fallback to executable-relative directory (for production deployment)
+	exePath, err := os.Executable()
+	if err != nil {
+		// Final fallback to current working directory
+		return []string{"templates"}
+	}
+
+	// Resolve any symlinks to get the real executable path
+	realExePath, err := filepath.EvalSymlinks(exePath)
+	if err == nil {
+		exePath = realExePath
+	}
+
+	exeDir := filepath.Dir(exePath)
+	templateDir := filepath.Join(exeDir, "templates")
+
+	// Ensure the template directory exists
+	if _, err := os.Stat(templateDir); os.IsNotExist(err) {
+		// Try to create it
+		if mkdirErr := os.MkdirAll(templateDir, 0755); mkdirErr != nil {
+			// If we can't create it, fallback to current directory
+			return []string{"templates"}
+		}
+	}
+
+	return []string{templateDir}
+}
+
+// convertDetectionResult converts detect.DetectionResult to TemplateDetectionResult
+func (c *ScanCommand) convertDetectionResult(result *detect.DetectionResult) TemplateDetectionResult {
+	scanResult := TemplateDetectionResult{
+		TemplateID:      result.SourceID,
+		VulnerabilityID: result.VulnerabilityID,
+		Vulnerable:      result.Vulnerable,
+		Confidence:      result.Confidence,
+		Severity:        string(result.Severity),
+		DetectionType:   string(result.Method),
+		ExecutedAt:      result.ExecutedAt,
+		ExecutionTime:   result.ExecutionTime,
+		Error:           result.Error,
+		Metadata:        result.Metadata,
+	}
+
+	// Convert evidence
+	scanResult.Evidence = make([]DetectionEvidence, len(result.Evidence))
+	for i, evidence := range result.Evidence {
+		scanResult.Evidence[i] = DetectionEvidence{
+			Type:        string(evidence.Type),
+			Location:    evidence.Location,
+			Expected:    evidence.Expected,
+			Actual:      evidence.Actual,
+			Description: evidence.Description,
+			Context:     evidence.Context,
+		}
+	}
+
+	// Extract template name from metadata if available
+	if templateName, ok := result.Metadata["template_name"].(string); ok {
+		scanResult.TemplateName = templateName
+	} else {
+		scanResult.TemplateName = result.SourceID // Fallback to ID
+	}
+
+	return scanResult
+}
+
+// countVulnerableTemplates counts how many templates detected vulnerabilities
+func countVulnerableTemplates(results []TemplateDetectionResult) int {
+	count := 0
+	for _, result := range results {
+		if result.Vulnerable {
+			count++
+		}
+	}
+	return count
+}
+
+// createScanSummaryResult creates a summarized result for regular scans
+func createScanSummaryResult(result *ScanResult) map[string]interface{} {
+	summary := make(map[string]interface{})
+
+	// Template Detection Results - always show if any exist
+	if len(result.TemplateDetectionResults) > 0 {
+		templateSummary := make(map[string]interface{})
+		templateSummary["total_templates"] = len(result.TemplateDetectionResults)
+		templateSummary["vulnerable_found"] = countVulnerableTemplates(result.TemplateDetectionResults)
+		templateSummary["successful_ids"] = getSuccessfulTemplateIDs(result.TemplateDetectionResults)
+		// Only include detailed results if there are vulnerabilities found
+		if countVulnerableTemplates(result.TemplateDetectionResults) > 0 {
+			templateSummary["vulnerability_details"] = getVulnerabilityDetails(result.TemplateDetectionResults)
+		}
+		summary["template_detection"] = templateSummary
+	}
+
+	// Basic System Information
+	summary["system_info"] = map[string]interface{}{
+		"os_info":     result.OSInfo,
+		"fingerprint": result.SystemFingerprint,
+	}
+
+	// Package Statistics (not full package list)
+	packageStats := make(map[string]interface{})
+	if len(result.EnhancedPackages) > 0 {
+		packageStats["total_packages"] = len(result.EnhancedPackages)
+		packageStats["sources"] = getPackageSourceSummary(result.EnhancedPackages)
+		packageStats["architectures"] = getPackageArchitectureSummary(result.EnhancedPackages)
+	} else if len(result.Packages) > 0 {
+		packageStats["total_packages"] = len(result.Packages)
+		packageStats["sources"] = getBasicPackageSourceSummary(result.Packages)
+	} else {
+		packageStats["total_packages"] = 0
+		packageStats["sources"] = map[string]int{}
+	}
+	summary["package_statistics"] = packageStats
+
+	// Scan Summary
+	scanSummary := make(map[string]interface{})
+	scanSummary["errors"] = result.ScanErrors
+	scanSummary["error_count"] = len(result.ScanErrors)
+	summary["scan_summary"] = scanSummary
+
+	return summary
+}
+
+// getSuccessfulTemplateIDs returns IDs of templates that detected vulnerabilities
+func getSuccessfulTemplateIDs(results []TemplateDetectionResult) []string {
+	var successIDs []string
+	for _, result := range results {
+		if result.Vulnerable {
+			successIDs = append(successIDs, result.TemplateID)
+		}
+	}
+	return successIDs
+}
+
+// getPackageSourceSummary returns package count by source from enhanced packages
+func getPackageSourceSummary(packages []EnhancedPackageInfo) map[string]int {
+	summary := make(map[string]int)
+	for _, pkg := range packages {
+		summary[pkg.Source]++
+	}
+	return summary
+}
+
+// getPackageArchitectureSummary returns package count by architecture from enhanced packages
+func getPackageArchitectureSummary(packages []EnhancedPackageInfo) map[string]int {
+	summary := make(map[string]int)
+	for _, pkg := range packages {
+		if pkg.Architecture != "" {
+			summary[pkg.Architecture]++
+		}
+	}
+	return summary
+}
+
+// getBasicPackageSourceSummary returns package count by source from basic packages
+func getBasicPackageSourceSummary(packages []InstalledPackage) map[string]int {
+	summary := make(map[string]int)
+	for _, pkg := range packages {
+		summary[pkg.Source]++
+	}
+	return summary
+}
+
+// getVulnerabilityDetails returns essential details for templates that found vulnerabilities
+func getVulnerabilityDetails(results []TemplateDetectionResult) []map[string]interface{} {
+	var details []map[string]interface{}
+	for _, result := range results {
+		if result.Vulnerable {
+			detail := map[string]interface{}{
+				"template_id":      result.TemplateID,
+				"template_name":    result.TemplateName,
+				"vulnerability_id": result.VulnerabilityID,
+				"confidence":       result.Confidence,
+				"severity":         result.Severity,
+			}
+			details = append(details, detail)
+		}
+	}
+	return details
+}
+
+
+// convertSeverityToRiskScore converts severity strings to CVSS-like risk scores
+func convertSeverityToRiskScore(severity string) float64 {
+	switch strings.ToLower(severity) {
+	case "critical":
+		return 9.0
+	case "high":
+		return 7.5
+	case "medium":
+		return 5.0
+	case "low":
+		return 2.5
+	case "info", "informational":
+		return 1.0
+	default:
+		return 5.0 // Default to medium if unknown
+	}
+}
