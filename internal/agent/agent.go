@@ -16,8 +16,9 @@ import (
 	// Import for Host struct
 
 	"github.com/SiriusScan/app-agent/internal/commands"
-	_ "github.com/SiriusScan/app-agent/internal/commands/scan"   // Import for side-effect (registration)
-	_ "github.com/SiriusScan/app-agent/internal/commands/status" // Import for side-effect (registration)
+	_ "github.com/SiriusScan/app-agent/internal/commands/scan"         // Import for side-effect (registration)
+	_ "github.com/SiriusScan/app-agent/internal/commands/status"       // Import for side-effect (registration)
+	_ "github.com/SiriusScan/app-agent/internal/commands/templatescan" // Import for side-effect (registration)
 	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/shell"
 	pb "github.com/SiriusScan/app-agent/proto/hello"
