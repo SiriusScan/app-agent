@@ -436,7 +436,7 @@ func outputResultsText(results []*types.Result, matchCount int) error {
 	}()
 
 	fmt.Fprintf(writer, "📊 Execution Summary\n")
-	fmt.Fprintf(writer, "=" + strings.Repeat("=", 50) + "\n\n")
+	fmt.Fprintf(writer, "="+strings.Repeat("=", 50)+"\n\n")
 
 	for i, result := range results {
 		if result.Matched {
@@ -446,7 +446,7 @@ func outputResultsText(results []*types.Result, matchCount int) error {
 		}
 	}
 
-	fmt.Fprintf(writer, "\n" + strings.Repeat("=", 52) + "\n")
+	fmt.Fprintf(writer, "\n"+strings.Repeat("=", 52)+"\n")
 	fmt.Fprintf(writer, "Summary: %d/%d templates matched\n", matchCount, len(results))
 
 	if matchCount > 0 {
@@ -473,4 +473,3 @@ func outputJSON(data interface{}) error {
 	encoder.SetIndent("", "  ")
 	return encoder.Encode(data)
 }
-

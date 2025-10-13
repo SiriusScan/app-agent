@@ -34,14 +34,14 @@ func GetTemplateBaseDir() (string, error) {
 // Creates: builtin/, custom/, server/, cache/ subdirectories.
 func EnsureDirectoryStructure(baseDir string) error {
 	dirs := []string{"builtin", "custom", "server", "cache"}
-	
+
 	for _, dir := range dirs {
 		path := filepath.Join(baseDir, dir)
 		if err := os.MkdirAll(path, 0755); err != nil {
 			return fmt.Errorf("failed to create %s directory: %w", dir, err)
 		}
 	}
-	
+
 	return nil
 }
 
@@ -71,4 +71,3 @@ func GetCacheDir() (string, error) {
 	}
 	return filepath.Join(baseDir, "cache"), nil
 }
-

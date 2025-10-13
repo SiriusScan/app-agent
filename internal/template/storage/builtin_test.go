@@ -45,7 +45,7 @@ func TestLoadBuiltinTemplates(t *testing.T) {
 		if tmpl.FilePath == "" {
 			t.Error("Built-in template has empty file path")
 		}
-		
+
 		t.Logf("✅ Built-in template: %s (%s) from %s", tmpl.ID, tmpl.Info.Name, tmpl.FilePath)
 	}
 
@@ -131,7 +131,7 @@ detection:
 func TestEmbeddedTemplatesInBinary(t *testing.T) {
 	// This test verifies that templates are actually embedded in the binary
 	// by checking the embed.FS is not empty
-	
+
 	if (embeddedTemplates == embed.FS{}) {
 		t.Fatal("Embedded templates FS is empty - templates not embedded")
 	}
@@ -152,4 +152,3 @@ func TestEmbeddedTemplatesInBinary(t *testing.T) {
 
 	t.Log("✅ Templates are properly embedded in the binary")
 }
-

@@ -56,15 +56,15 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 			return "", fmt.Errorf("template %q is invalid: %w", config.TemplatePath, err)
 		}
 		templates = []*types.Template{template}
-		
+
 		agentInfo.Logger.Info("Running single template",
 			zap.String("path", config.TemplatePath))
-			
+
 	} else if config.Directory != "" {
 		// Specific directory (bypasses manager, uses direct path)
 		agentInfo.Logger.Info("Discovering templates from directory",
 			zap.String("directory", config.Directory))
-			
+
 		templates, discoveryErrors = parser.DiscoverTemplatesWithContext(ctx, config.Directory)
 
 		if len(templates) == 0 {
@@ -82,11 +82,11 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 			}
 			return "", fmt.Errorf(errMsg)
 		}
-		
+
 	} else {
 		// Use template manager (discovers from all sources: custom > server > builtin)
 		agentInfo.Logger.Info("Using template manager for discovery")
-		
+
 		manager, err := storage.NewManager(agentInfo.Logger)
 		if err != nil {
 			return "", fmt.Errorf("failed to initialize template manager: %w", err)
@@ -100,7 +100,7 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 		if len(templates) == 0 {
 			return "", fmt.Errorf("no templates available. Try installing templates in %s or use --directory", manager.GetStoragePath())
 		}
-		
+
 		agentInfo.Logger.Info("Discovered templates from manager",
 			zap.Int("count", len(templates)),
 			zap.String("base_dir", manager.GetStoragePath()))
@@ -108,7 +108,7 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 
 	// Execute templates with worker pool
 	startTime := time.Now()
-	
+
 	poolConfig := executor.DefaultWorkerPoolConfig()
 	poolConfig.Context = ctx
 	poolConfig.Workers = config.Workers
@@ -157,7 +157,10 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 			config.TemplatePath = parts[i]
 
 		case "--all":
-			config.Directory = "/app-agent/templates"
+			// --all flag: use template manager (leave Directory empty)
+			// This triggers the template manager code path which discovers
+			// templates from all sources: custom > server > builtin
+			// Do nothing - keep config.Directory empty
 
 		case "--workers", "-w":
 			if i+1 >= len(parts) {
@@ -250,14 +253,14 @@ func (c *ScanCommand) generateJSONOutput(
 
 	output := struct {
 		Summary struct {
-			TotalTemplates  int     `json:"total_templates"`
-			Matched         int     `json:"matched"`
-			ExecutionTimeMs int64   `json:"execution_time_ms"`
-			Workers         int     `json:"workers"`
+			TotalTemplates  int   `json:"total_templates"`
+			Matched         int   `json:"matched"`
+			ExecutionTimeMs int64 `json:"execution_time_ms"`
+			Workers         int   `json:"workers"`
 		} `json:"summary"`
-		Results          []*types.Result `json:"results"`
-		DiscoveryErrors  []string        `json:"discovery_errors,omitempty"`
-		ExecutionErrors  []string        `json:"execution_errors,omitempty"`
+		Results         []*types.Result `json:"results"`
+		DiscoveryErrors []string        `json:"discovery_errors,omitempty"`
+		ExecutionErrors []string        `json:"execution_errors,omitempty"`
 	}{}
 
 	output.Summary.TotalTemplates = len(templates)
@@ -335,11 +338,11 @@ func (c *ScanCommand) generateTextOutput(
 
 		output.WriteString(fmt.Sprintf("[%d] %s %s (ID: %s)\n", i+1, status, result.TemplateName, result.TemplateID))
 		output.WriteString(fmt.Sprintf("    Severity: %s | Confidence: %.2f\n", result.Severity, result.Confidence))
-		
+
 		if result.Matched && len(result.Steps) > 0 {
 			output.WriteString(fmt.Sprintf("    Matched Steps: %d/%d\n", countMatchedSteps(result), len(result.Steps)))
 		}
-		
+
 		if len(result.Errors) > 0 {
 			output.WriteString(fmt.Sprintf("    Errors: %s\n", strings.Join(result.Errors, ", ")))
 		}
@@ -375,4 +378,3 @@ type ScanConfig struct {
 	TimeoutSeconds int
 	Format         string
 }
-

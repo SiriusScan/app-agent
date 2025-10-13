@@ -169,4 +169,3 @@ func (m *Manager) ListTemplates(ctx context.Context, source TemplateSource) ([]*
 func (m *Manager) GetStoragePath() string {
 	return m.baseDir
 }
-

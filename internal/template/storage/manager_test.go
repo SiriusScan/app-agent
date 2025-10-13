@@ -106,7 +106,7 @@ detection:
 	if len(templates) < 2 {
 		t.Errorf("Expected at least 2 templates, got %d", len(templates))
 	}
-	
+
 	t.Logf("✅ Discovered %d total templates (including %d built-in)", len(templates), len(templates)-2)
 
 	// Check TEST-001 is from custom (highest priority)
@@ -276,4 +276,3 @@ func TestGetStoragePath(t *testing.T) {
 
 	t.Logf("✅ GetStoragePath() returns correct path: %s", storagePath)
 }
-

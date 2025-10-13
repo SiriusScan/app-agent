@@ -118,4 +118,3 @@ func TestGetCacheDir(t *testing.T) {
 
 	t.Logf("✅ Cache directory: %s", dir)
 }
-

@@ -19,7 +19,7 @@ var embeddedTemplates embed.FS
 func (m *Manager) loadBuiltinTemplates(ctx context.Context) ([]*types.Template, error) {
 	// Use the package-level embedded FS
 	fsToUse := embeddedTemplates
-	
+
 	// If manager has custom embedded FS (for testing), use that instead
 	if m.embeddedFS != (embed.FS{}) {
 		fsToUse = m.embeddedFS
@@ -79,4 +79,3 @@ func (m *Manager) loadBuiltinTemplates(ctx context.Context) ([]*types.Template, 
 
 	return templates, nil
 }
-
