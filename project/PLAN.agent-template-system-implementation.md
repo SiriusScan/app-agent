@@ -12,6 +12,7 @@
 ## Implementation Strategy
 
 ### Approach:
+
 1. **Clean first, then build** - Remove POC code, establish clean structure
 2. **Foundation before features** - Core architecture before modules
 3. **Vertical slices** - Complete one module end-to-end before starting next
@@ -19,6 +20,7 @@
 5. **Document as we go** - Update docs with each completed phase
 
 ### Success Criteria:
+
 - ✅ Agent runs templates in standalone mode
 - ✅ Four core modules functional (FileHash, FileContent, VersionCmd, + Module registry)
 - ✅ Worker pool executes 1,000+ templates efficiently
@@ -35,6 +37,7 @@
 ### Tasks:
 
 #### 0.1: Repository Cleanup
+
 - [ ] Create feature branch: `feature/template-system-mvp`
 - [ ] Snapshot current state (commit)
 - [ ] Delete test commands (`cmd/test-*`, `cmd/command-*`, etc.)
@@ -47,6 +50,7 @@
 **Test Strategy**: `git status` shows only intentional deletions
 
 #### 0.2: Directory Structure Setup
+
 - [ ] Create `internal/modules/registry/`
 - [ ] Create `internal/common/{files,os,patterns,results,errors}/`
 - [ ] Create `internal/template/{parser,executor,types}/`
@@ -58,6 +62,7 @@
 **Test Strategy**: All new directories exist with README stubs
 
 #### 0.3: Container Development Environment
+
 - [ ] Create `testing/Dockerfile.linux` (Ubuntu 22.04)
 - [ ] Create `testing/docker-compose.dev.yaml`
 - [ ] Create `testing/Makefile` with targets:
@@ -80,6 +85,7 @@
 ### Tasks:
 
 #### 1.1: Module Registry System
+
 - [ ] Define `Module` interface in `internal/modules/types.go`
 - [ ] Define `Descriptor` struct for module metadata
 - [ ] Implement module registry in `internal/modules/registry/registry.go`
@@ -92,6 +98,7 @@
 **Test Strategy**: Register dummy module, retrieve it, list all modules
 
 #### 1.2: Template Type System
+
 - [ ] Define template types in `internal/template/types/types.go`:
   - `Template` struct
   - `TemplateInfo` struct
@@ -107,6 +114,7 @@
 **Test Strategy**: Create test templates, marshal/unmarshal JSON/YAML
 
 #### 1.3: Shared Libraries - Files
+
 - [ ] Implement `internal/common/files/read.go` - Safe file reading
 - [ ] Implement `internal/common/files/hash.go` - Hash calculation (SHA256, SHA1, MD5, SHA512)
 - [ ] Implement `internal/common/files/exists.go` - File existence checks
@@ -117,6 +125,7 @@
 **Test Strategy**: Create test files, verify hash calculations, test size limits
 
 #### 1.4: Shared Libraries - Patterns & Results
+
 - [ ] Implement `internal/common/patterns/match.go` - Regex matching
 - [ ] Implement `internal/common/results/builder.go` - Result construction
 - [ ] Implement `internal/common/errors/types.go` - Standard error types
@@ -135,6 +144,7 @@
 ### Tasks:
 
 #### 2.1: YAML Parser
+
 - [ ] Implement `internal/template/parser/parser.go`
 - [ ] Add `ParseTemplate(path string) (*Template, error)`
 - [ ] Add `ParseTemplateBytes(data []byte) (*Template, error)`
@@ -146,6 +156,7 @@
 **Test Strategy**: Parse valid and invalid YAML templates
 
 #### 2.2: Template Validation
+
 - [ ] Implement `ValidateTemplate(t *Template) error`
 - [ ] Validate required fields (id, info.name, info.severity, detection.steps)
 - [ ] Validate severity levels
@@ -158,6 +169,7 @@
 **Test Strategy**: Validate correct and incorrect templates, check error messages
 
 #### 2.3: Template Discovery
+
 - [ ] Implement `DiscoverTemplates(dir string) ([]*Template, error)`
 - [ ] Walk directory recursively
 - [ ] Find all .yaml/.yml files
@@ -178,6 +190,7 @@
 ### Tasks:
 
 #### 3.1: FileHash Module Implementation
+
 - [ ] Create `internal/modules/filehash/filehash.go`
 - [ ] Implement `FileHashModule` struct
 - [ ] Implement `Execute(ctx context.Context, config StepConfig) (*Result, error)`
@@ -192,6 +205,7 @@
 **Test Strategy**: Create test file, calculate hash, verify detection
 
 #### 3.2: FileHash Module Registration
+
 - [ ] Add `init()` function to register module
 - [ ] Define module descriptor:
   - Type: "file_hash"
@@ -204,6 +218,7 @@
 **Test Strategy**: List modules, verify FileHash appears with correct metadata
 
 #### 3.3: FileHash Integration Test
+
 - [ ] Create test file in `testing/test-data/vulnerable-sshd`
 - [ ] Calculate known hash
 - [ ] Create template in `testing/test-templates/01-file-hash.yaml`
@@ -223,6 +238,7 @@
 ### Tasks:
 
 #### 4.1: Single Template Executor
+
 - [ ] Implement `internal/template/executor/executor.go`
 - [ ] Implement `ExecuteTemplate(ctx context.Context, template *Template) (*Result, error)`
 - [ ] Filter steps by current platform
@@ -239,6 +255,7 @@
 **Test Strategy**: Execute template with multiple steps, verify all run
 
 #### 4.2: Logic Evaluation
+
 - [ ] Implement `EvaluateLogic(logic string, steps []StepResult) bool`
 - [ ] Handle "all" logic (AND - all must match)
 - [ ] Handle "any" logic (OR - at least one matches)
@@ -249,6 +266,7 @@
 **Test Strategy**: Test AND/OR logic with various step results
 
 #### 4.3: Confidence Calculation
+
 - [ ] Implement `CalculateConfidence(steps []StepResult, weights []float64) float64`
 - [ ] AND logic: minimum of matched weights
 - [ ] OR logic: maximum of matched weights
@@ -268,6 +286,7 @@
 ### Tasks:
 
 #### 5.1: FileContent Module Implementation
+
 - [ ] Create `internal/modules/filecontent/filecontent.go`
 - [ ] Implement `FileContentModule` struct
 - [ ] Implement `Execute()` method
@@ -282,6 +301,7 @@
 **Test Strategy**: Create test file with patterns, verify regex matching
 
 #### 5.2: FileContent Integration Test
+
 - [ ] Create test file with vulnerable config pattern
 - [ ] Create template `testing/test-templates/02-file-content.yaml`
 - [ ] Test in container
@@ -299,6 +319,7 @@
 ### Tasks:
 
 #### 6.1: Cobra Setup
+
 - [ ] Add Cobra dependency: `go get github.com/spf13/cobra`
 - [ ] Refactor `cmd/agent/main.go` to use Cobra
 - [ ] Create root command
@@ -309,6 +330,7 @@
 **Test Strategy**: `./agent --help` shows commands
 
 #### 6.2: Template Commands
+
 - [ ] Create `template` command group
 - [ ] Implement `template run <path-or-id>` subcommand
 - [ ] Implement `template run-all <directory>` subcommand
@@ -321,6 +343,7 @@
 **Test Strategy**: Run each command, verify output
 
 #### 6.3: Module Commands
+
 - [ ] Create `module` command group
 - [ ] Implement `module list` subcommand
 - [ ] Implement `module info <type>` subcommand
@@ -338,6 +361,7 @@
 ### Tasks:
 
 #### 7.1: Worker Pool Implementation
+
 - [ ] Create `internal/template/executor/pool.go`
 - [ ] Implement `ExecuteTemplatesParallel(templates []*Template, workers int) []Result`
 - [ ] Create job channel and result channel
@@ -351,6 +375,7 @@
 **Test Strategy**: Run 100 templates, verify all execute
 
 #### 7.2: Worker Pool Configuration
+
 - [ ] Add `--workers` flag (default: `runtime.NumCPU()`)
 - [ ] Add worker count validation (max: 50)
 - [ ] Add per-template timeout (5 minutes)
@@ -368,6 +393,7 @@
 ### Tasks:
 
 #### 8.1: JSON Output
+
 - [ ] Implement result serialization to JSON
 - [ ] Single template: Pretty-printed JSON
 - [ ] Multiple templates: JSONL (one per line)
@@ -378,6 +404,7 @@
 **Test Strategy**: Run templates, pipe to `jq`, verify parsing
 
 #### 8.2: Text Output
+
 - [ ] Implement `--format text` for human-readable output
 - [ ] Color-code severity (critical=red, high=orange, etc.)
 - [ ] Format evidence nicely
@@ -395,6 +422,7 @@
 ### Tasks:
 
 #### 9.1: CommandVersion Module
+
 - [ ] Create `internal/modules/versioncmd/versioncmd.go`
 - [ ] Implement `CommandVersionModule` struct
 - [ ] Implement `Execute()` method
@@ -410,6 +438,7 @@
 **Test Strategy**: Run version commands (`ssh -V`, etc.), verify parsing
 
 #### 9.2: CommandVersion Integration Test
+
 - [ ] Create template for SSH version detection
 - [ ] Test in container
 - [ ] Verify version extraction
@@ -426,6 +455,7 @@
 ### Tasks:
 
 #### 10.1: Example Templates
+
 - [ ] Create `templates/examples/openssh-vulnerable.yaml`
 - [ ] Create `templates/examples/apache-misconfiguration.yaml`
 - [ ] Create `templates/examples/nginx-version-detection.yaml`
@@ -436,6 +466,7 @@
 **Test Strategy**: All example templates execute successfully
 
 #### 10.2: Template Writing Guide
+
 - [ ] Write `documentation/TEMPLATE-WRITING-GUIDE.md`
 - [ ] Explain YAML schema
 - [ ] Document each module's config fields
@@ -445,6 +476,7 @@
 - [ ] Commit: "docs: add template writing guide"
 
 #### 10.3: Module Development Guide
+
 - [ ] Write `documentation/MODULE-DEVELOPMENT-GUIDE.md`
 - [ ] Explain Module interface
 - [ ] Show how to register modules
@@ -453,6 +485,7 @@
 - [ ] Commit: "docs: add module development guide"
 
 #### 10.4: Update Main README
+
 - [ ] Update `README.md` with new architecture
 - [ ] Add quick start guide
 - [ ] Add CLI usage examples
@@ -468,6 +501,7 @@
 ### Tasks:
 
 #### 11.1: Comprehensive Integration Tests
+
 - [ ] Create 20+ test templates covering all modules
 - [ ] Create corresponding test data files
 - [ ] Run full test suite: `make test-all`
@@ -479,6 +513,7 @@
 **Test Strategy**: `make test-all` runs all tests, reports pass/fail
 
 #### 11.2: Performance Testing
+
 - [ ] Generate 1,000 dummy templates
 - [ ] Time execution with different worker counts
 - [ ] Verify parallelism is working
@@ -489,6 +524,7 @@
 **Test Strategy**: 1,000 templates complete in < 5 minutes
 
 #### 11.3: Error Handling Review
+
 - [ ] Review all error paths
 - [ ] Ensure graceful error messages
 - [ ] Test error scenarios (bad templates, missing files, etc.)
@@ -496,6 +532,7 @@
 - [ ] Commit: "fix: improve error handling throughout"
 
 #### 11.4: Code Cleanup
+
 - [ ] Run `gofmt` on all files
 - [ ] Run `go mod tidy`
 - [ ] Remove debug logging
@@ -512,6 +549,7 @@
 ### Tasks:
 
 #### 12.1: Final Testing
+
 - [ ] Fresh clone of repository
 - [ ] Follow README from scratch
 - [ ] Verify all commands work
@@ -520,6 +558,7 @@
 - [ ] Document any issues
 
 #### 12.2: Documentation Review
+
 - [ ] Review all documentation for accuracy
 - [ ] Check all links work
 - [ ] Verify code examples are correct
@@ -527,6 +566,7 @@
 - [ ] Make corrections
 
 #### 12.3: Release Preparation
+
 - [ ] Update CHANGELOG.md (if exists)
 - [ ] Tag release: `v1.0.0-mvp`
 - [ ] Create release notes
@@ -537,6 +577,7 @@
 ## Milestones & Checkpoints
 
 ### Milestone 1: Foundation Complete (End of Week 1)
+
 - ✅ Project cleaned up
 - ✅ Directory structure established
 - ✅ Container development environment working
@@ -544,30 +585,35 @@
 - ✅ Type system defined
 
 ### Milestone 2: First Module Working (End of Week 2)
+
 - ✅ Template parser complete
 - ✅ FileHash module functional
 - ✅ Can execute single template
 - ✅ JSON output working
 
 ### Milestone 3: CLI & Multiple Modules (End of Week 3)
+
 - ✅ Cobra CLI implemented
 - ✅ FileContent module working
 - ✅ Template executor complete
 - ✅ Integration tests passing
 
 ### Milestone 4: Production Features (End of Week 4)
+
 - ✅ Worker pool functional
 - ✅ CommandVersion module working
 - ✅ All output formats implemented
 - ✅ Performance acceptable
 
 ### Milestone 5: Complete & Documented (End of Week 5)
+
 - ✅ All modules documented
 - ✅ Example templates created
 - ✅ Comprehensive tests passing
 - ✅ Ready for wider testing
 
 ### Milestone 6: Production Ready (End of Week 6)
+
 - ✅ Final testing complete
 - ✅ Documentation reviewed
 - ✅ Release prepared
@@ -579,21 +625,21 @@
 
 ### Technical Risks:
 
-| Risk | Probability | Impact | Mitigation |
-|------|-------------|--------|------------|
-| Module interface too rigid | Medium | High | Keep interface minimal, use StepConfig map |
-| Template schema changes needed | High | Medium | Version templates, support migration |
-| Performance issues with 10K templates | Medium | High | Worker pool, test early with large sets |
-| Cross-platform issues | Low | Medium | Focus on Linux first, defer others |
+| Risk                                  | Probability | Impact | Mitigation                                 |
+| ------------------------------------- | ----------- | ------ | ------------------------------------------ |
+| Module interface too rigid            | Medium      | High   | Keep interface minimal, use StepConfig map |
+| Template schema changes needed        | High        | Medium | Version templates, support migration       |
+| Performance issues with 10K templates | Medium      | High   | Worker pool, test early with large sets    |
+| Cross-platform issues                 | Low         | Medium | Focus on Linux first, defer others         |
 
 ### Schedule Risks:
 
-| Risk | Probability | Impact | Mitigation |
-|------|-------------|--------|------------|
-| Cleanup takes longer than expected | Medium | Low | Timebox to 1 day, defer if needed |
-| Module complexity underestimated | Medium | Medium | Start with simplest (FileHash) first |
-| Testing reveals major issues | Medium | High | Test continuously, catch issues early |
-| Documentation takes too long | High | Low | Write docs as we implement |
+| Risk                               | Probability | Impact | Mitigation                            |
+| ---------------------------------- | ----------- | ------ | ------------------------------------- |
+| Cleanup takes longer than expected | Medium      | Low    | Timebox to 1 day, defer if needed     |
+| Module complexity underestimated   | Medium      | Medium | Start with simplest (FileHash) first  |
+| Testing reveals major issues       | Medium      | High   | Test continuously, catch issues early |
+| Documentation takes too long       | High        | Low    | Write docs as we implement            |
 
 ---
 
@@ -632,4 +678,3 @@ Features to consider after MVP is complete:
 ---
 
 **This plan is a living document. Update it as implementation progresses.**
-

@@ -22,6 +22,7 @@ Welcome to the Sirius Agent project! This document will get you up to speed quic
 ## Quick Start
 
 ### Prerequisites:
+
 - Go 1.24+ installed
 - Docker installed (for Linux testing)
 - Basic understanding of YAML and Go
@@ -103,13 +104,13 @@ info:
   description: Detects vulnerable OpenSSH version
 
 detection:
-  logic: all  # AND logic (all steps must match)
+  logic: all # AND logic (all steps must match)
   steps:
     - type: file_hash
       path: /usr/sbin/sshd
       hash: "4f5f9..."
       weight: 0.8
-    
+
     - type: file_content
       path: /usr/sbin/sshd
       regex: "OpenSSH_6\\.5\\.1"
@@ -128,10 +129,10 @@ func (m *FileHashModule) Execute(ctx context.Context, config StepConfig) (*Resul
     // Extract config
     path := config.GetString("path")
     expectedHash := config.GetString("hash")
-    
+
     // Calculate hash using shared library
     actualHash, err := files.CalculateHash(path, "sha256")
-    
+
     // Build and return result
     return results.Build(matched, confidence, evidence), nil
 }
@@ -227,23 +228,27 @@ make test-template TEMPLATE=test-my-module.yaml
 ## Key Design Principles
 
 ### 1. **MVP Focus**
+
 - Simple AND/OR logic (no complex expressions)
 - Four core modules (FileHash, FileContent, VersionCmd, [Script deferred])
 - Linux-first (macOS/Windows later)
 - Outcome-focused testing (not coverage metrics)
 
 ### 2. **Modularity**
+
 - Each module is self-contained
 - Modules use shared libraries (DRY principle)
 - No module-to-module dependencies
 - Easy to add new modules
 
 ### 3. **Scalability**
+
 - Worker pool for parallel template execution
 - Sequential steps within templates
 - 10,000+ templates should complete in ~20 minutes
 
 ### 4. **Developer Experience**
+
 - Fast iteration (no container rebuilds)
 - Clear error messages
 - Simple testing workflow
@@ -254,28 +259,33 @@ make test-template TEMPLATE=test-my-module.yaml
 ## Common Tasks
 
 ### Run a Single Template:
+
 ```bash
 ./agent template run /path/to/template.yaml
 ```
 
 ### Run All Templates in Directory:
+
 ```bash
 ./agent template run-all /templates/
 # Outputs JSONL (one JSON object per line)
 ```
 
 ### List Registered Modules:
+
 ```bash
 ./agent module list
 ```
 
 ### Get Module Details:
+
 ```bash
 ./agent module info file_hash
 # Shows: description, supported OS, config fields
 ```
 
 ### Validate Template Syntax:
+
 ```bash
 ./agent template validate /path/to/template.yaml
 ```
@@ -287,6 +297,7 @@ make test-template TEMPLATE=test-my-module.yaml
 We focus on **integration testing** (does it work end-to-end?) rather than unit testing (does each function work?).
 
 ### Test Pattern:
+
 1. Create fake vulnerable file in `testing/test-data/`
 2. Write template that should detect it
 3. Run template in Linux container
@@ -300,11 +311,13 @@ We focus on **integration testing** (does it work end-to-end?) rather than unit 
 ## Documentation Structure
 
 ### For Users:
+
 - `README.md` - Project overview
 - `documentation/agent_template_system_PRD.md` - Product requirements
 - Template writing guides (TBD)
 
 ### For Developers:
+
 - `project/PROJECT-INTRO.md` - This file (onboarding)
 - `project/BRAINSTORM.template-system-notes.md` - Design decisions
 - `project/PLAN.agent-template-system-implementation.md` - Implementation plan
@@ -357,4 +370,3 @@ A: Security team writes them, community contributes them, they're version-contro
 ---
 
 **Welcome to the team! Let's build something great.** 🚀
-
