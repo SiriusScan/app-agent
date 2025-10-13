@@ -444,4 +444,3 @@ func TestFileHashModule_Integration(t *testing.T) {
 	t.Logf("    Version: %s", descriptor.Version)
 	t.Logf("    Supported OS: %v", descriptor.SupportedOS)
 }
-

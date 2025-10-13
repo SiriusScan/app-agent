@@ -1,0 +1,29 @@
+id: CVE-2024-TEST-001
+info:
+  name: Vulnerable SSH Daemon Detection
+  author: Sirius Scan
+  severity: critical
+  description: Detects vulnerable SSH daemon binary by file hash
+  references:
+    - https://example.com/cve-2024-test-001
+  cve:
+    - CVE-2024-TEST-001
+  tags:
+    - ssh
+    - network
+    - critical
+  version: "1.0"
+
+detection:
+  logic: all
+  steps:
+    - type: file_hash
+      platforms:
+        - linux
+        - darwin
+      weight: 1.0
+      config:
+        path: testing/test-data/vulnerable-sshd
+        hash: ace82037990b313aa3bfb845f7c609ee1c3f811287fc6fa6896cde2ec47327cd
+        algorithm: sha256
+

@@ -134,4 +134,3 @@ func init() {
 		panic(fmt.Sprintf("failed to register file_hash module: %v", err))
 	}
 }
-

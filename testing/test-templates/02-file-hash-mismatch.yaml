@@ -1,0 +1,21 @@
+id: CVE-2024-TEST-002
+info:
+  name: File Hash Mismatch Test
+  author: Sirius Scan
+  severity: high
+  description: Tests hash mismatch detection (should not match)
+  version: "1.0"
+
+detection:
+  logic: all
+  steps:
+    - type: file_hash
+      platforms:
+        - linux
+        - darwin
+      weight: 1.0
+      config:
+        path: testing/test-data/vulnerable-sshd
+        hash: 0000000000000000000000000000000000000000000000000000000000000000
+        algorithm: sha256
+

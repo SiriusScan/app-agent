@@ -1,0 +1,22 @@
+id: CVE-2024-TEST-003
+info:
+  name: Missing File Test
+  author: Sirius Scan
+  severity: medium
+  description: Tests missing file error handling
+  version: "1.0"
+
+detection:
+  logic: all
+  steps:
+    - type: file_hash
+      platforms:
+        - linux
+        - darwin
+        - windows
+      weight: 1.0
+      config:
+        path: /nonexistent/file/that/does/not/exist
+        hash: ace82037990b313aa3bfb845f7c609ee1c3f811287fc6fa6896cde2ec47327cd
+        algorithm: sha256
+

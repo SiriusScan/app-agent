@@ -466,4 +466,3 @@ func TestIsTemplateFile(t *testing.T) {
 
 	t.Log("  ✅ isTemplateFile() works correctly for all file types")
 }
-

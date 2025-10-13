@@ -137,4 +137,3 @@ func isTemplateFile(path string) bool {
 	ext := strings.ToLower(filepath.Ext(path))
 	return ext == ".yaml" || ext == ".yml"
 }
-
