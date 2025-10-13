@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  agent-test:
+    build:
+      context: .
+      dockerfile: Dockerfile.linux
+    image: agent-test:latest
+    container_name: agent-test
+    volumes:
+      # Mount compiled binary
+      - ../bin:/app/bin
+      # Mount test data and templates
+      - ./test-data:/app/test-data
+      - ./test-templates:/app/test-templates
+    # Keep container running for interactive testing
+    stdin_open: true
+    tty: true
+

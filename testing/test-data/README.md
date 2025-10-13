@@ -17,4 +17,3 @@ vulnerable-apache/    # Vulnerable Apache config files
 vulnerable-nginx/     # Vulnerable Nginx config files
 test-files/           # Generic test files
 ```
-

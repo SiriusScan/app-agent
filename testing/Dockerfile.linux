@@ -1,0 +1,18 @@
+# Minimal Ubuntu 22.04 for testing Linux builds
+FROM ubuntu:22.04
+
+# Install basic tools for testing
+RUN apt-get update && apt-get install -y \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create working directory
+WORKDIR /app
+
+# Mount points will be:
+# - /app/bin/ (compiled agent binary)
+# - /app/test-data/ (test files)
+# - /app/test-templates/ (test templates)
+
+CMD ["/bin/bash"]
+
