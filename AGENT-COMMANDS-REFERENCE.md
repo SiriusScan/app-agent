@@ -58,13 +58,13 @@ When connected to server, these commands can be sent from the server console or 
 **⚠️ IMPORTANT:** Command name includes `internal:` prefix!
 
 ```bash
-# Basic scan (uses default template directory)
+# Use template manager (discovers embedded + custom + server templates)
 <agent-id> internal:template-scan
 
-# Scan all templates
+# Same as above (--all uses template manager)
 <agent-id> internal:template-scan --all
 
-# Scan specific directory
+# Scan specific directory (bypasses template manager)
 <agent-id> internal:template-scan --directory /app-agent/templates
 
 # Scan single template
@@ -142,6 +142,29 @@ When connected to server, these commands can be sent from the server console or 
 ...
 ```
 
+## Template Discovery System
+
+**Default Behavior (no args or `--all` flag):**
+
+The agent uses the **Template Manager** which discovers templates from multiple sources with precedence:
+
+1. **Custom templates** (highest priority)
+   - Linux: `~/.config/sirius-agent/templates/custom/`
+   - macOS: `~/Library/Application Support/sirius-agent/templates/custom/`
+   - Windows: `%APPDATA%\sirius-agent\templates\custom\`
+
+2. **Server-synced templates** (medium priority)
+   - Location: `<base>/server/`
+
+3. **Built-in templates** (lowest priority)
+   - **Embedded in agent binary** (always available)
+   - Includes 5 templates: CVE-2024-TEST-001, 004, 005, 006, 007
+
+**Key Points:**
+- Custom templates override built-in templates with the same ID
+- No external files required (built-in templates are embedded)
+- Override location: `export SIRIUS_TEMPLATE_DIR=/custom/path`
+
 ## Troubleshooting
 
 ### Command Not Found
@@ -158,12 +181,27 @@ When connected to server, these commands can be sent from the server console or 
 
 **Error:** `no templates found in "/app-agent/templates"`
 
-**Solutions:**
+**This error should not occur with Phase 7.6+** because the agent now has 5 built-in templates embedded in the binary.
 
-1. Check template directory exists: `ls /app-agent/templates`
-2. Ensure templates are valid YAML
-3. Use `--directory` flag to specify correct path
-4. Check file permissions
+**If you see this error:**
+
+1. **Remove the `--directory` flag** - Use template manager instead:
+   ```bash
+   # ❌ Wrong (tries hardcoded directory)
+   internal:template-scan --directory /app-agent/templates
+   
+   # ✅ Correct (uses template manager with embedded templates)
+   internal:template-scan --all
+   ```
+
+2. **Verify binary includes templates:**
+   ```bash
+   strings bin/sirius-agent | grep "CVE-2024-TEST"
+   ```
+
+3. **Check agent version** - Ensure you're using Phase 7.6+ agent
+
+4. **For custom directory** - Ensure path exists and has valid YAML files
 
 ### Worker Count Error
 
