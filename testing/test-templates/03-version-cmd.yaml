@@ -1,0 +1,28 @@
+id: CVE-2024-TEST-003
+info:
+  name: "Old Bash Version Detection"
+  author: "Sirius Scan"
+  severity: medium
+  description: "Detects older bash versions that may have security vulnerabilities"
+  references:
+    - "https://www.gnu.org/software/bash/"
+  tags:
+    - bash
+    - version
+    - command
+  version: "1.0.0"
+
+detection:
+  logic: all
+  steps:
+    - type: version_cmd
+      platforms:
+        - linux
+        - darwin
+      weight: 1.0
+      config:
+        command:
+          - "bash"
+          - "--version"
+        regex: 'version (\d+\.\d+\.\d+)'
+

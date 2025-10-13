@@ -6,6 +6,7 @@ import (
 
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register modules
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"
+	_ "github.com/SiriusScan/app-agent/internal/modules/versioncmd"
 	"github.com/SiriusScan/app-agent/internal/cmd"
 )
 
