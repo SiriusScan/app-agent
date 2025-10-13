@@ -5,7 +5,7 @@
 ✅ **Template execution works perfectly** - templates run, vulnerabilities are detected  
 ❌ **No data reaches the database** - results only returned via gRPC, never persisted  
 ❌ **No UI visibility** - vulnerabilities don't appear in the web interface  
-❌ **Missing host information** - no fingerprinting, no inventory, no context  
+❌ **Missing host information** - no fingerprinting, no inventory, no context
 
 ---
 
@@ -61,7 +61,7 @@ type Vulnerability struct {
 type Host struct {
     gorm.Model
     // ... same fields as above ...
-    
+
     // Enhanced JSONB fields (added in Migration 004):
     SoftwareInventory JSONB `json:"software_inventory,omitempty"`
     SystemFingerprint JSONB `json:"system_fingerprint,omitempty"`
@@ -70,6 +70,7 @@ type Host struct {
 ```
 
 **AgentMetadata Structure:**
+
 ```json
 {
   "agent_version": "1.0.0-mvp",
@@ -98,6 +99,7 @@ type Host struct {
 #### Components
 
 1. **Basic Host Fingerprinting** (`internal/template/fingerprint/`)
+
    - OS name (runtime.GOOS)
    - OS version (platform-specific detection)
    - Hostname (os.Hostname())
@@ -105,11 +107,13 @@ type Host struct {
    - Agent ID (from config)
 
 2. **Result Conversion** (`internal/template/reporting/`)
+
    - Template results → `sirius.Vulnerability[]`
    - Build `sirius.Host` with fingerprint + vulnerabilities
    - Build `agent_metadata` with template details
 
 3. **API Submission** (`internal/commands/templatescan/scan_command.go`)
+
    - After template execution, call `agentInfo.APIClient.UpdateHostRecord()`
    - Async submission (don't block command)
    - Graceful error handling
@@ -155,11 +159,13 @@ internal:template-scan → Execute Templates → Results
 #### Additional Components
 
 1. **Software Package Enumeration**
+
    - Windows: Registry, winget, wmic
    - Linux: dpkg, rpm, apt
    - macOS: brew, system_profiler
 
 2. **System Fingerprinting**
+
    - CPU (model, cores, architecture)
    - Memory (total, available)
    - Storage (disks, filesystems)
@@ -185,21 +191,25 @@ internal:template-scan → Execute Templates → Results
 ## Implementation Tasks (Phase 7.7.1)
 
 ### Task 7.7.1.1: Basic Host Fingerprinting
+
 - **File**: `internal/template/fingerprint/fingerprint.go` (NEW)
 - **Dependencies**: None
 - **Estimated Time**: 0.5 days
 
 ### Task 7.7.1.2: Result Conversion Utilities
+
 - **File**: `internal/template/reporting/converter.go` (NEW)
 - **Dependencies**: 7.7.1.1
 - **Estimated Time**: 0.5 days
 
 ### Task 7.7.1.3: API Submission Integration
+
 - **File**: `internal/commands/templatescan/scan_command.go` (MODIFY)
 - **Dependencies**: 7.7.1.1, 7.7.1.2
 - **Estimated Time**: 1 day
 
 ### Task 7.7.1.4: Integration Testing
+
 - **Dependencies**: 7.7.1.1, 7.7.1.2, 7.7.1.3
 - **Estimated Time**: 0.5-1 day
 
@@ -212,6 +222,7 @@ internal:template-scan → Execute Templates → Results
 ### Success Criteria
 
 1. **Database Validation**
+
    ```sql
    SELECT h.hostname, h.os, v.vid, v.title, v.risk_score
    FROM hosts h
@@ -219,9 +230,11 @@ internal:template-scan → Execute Templates → Results
    JOIN vulnerabilities v ON hv.vulnerability_id = v.id
    WHERE h.hostname = '<agent-hostname>';
    ```
+
    **Expected**: All matched templates appear as vulnerabilities
 
 2. **UI Validation**
+
    - Navigate to `http://localhost:3000/scanner`
    - Verify host appears in hosts list
    - Click on host, verify vulnerabilities displayed
@@ -257,12 +270,12 @@ export ENABLE_FINGERPRINTING=true
 
 ## Risks & Mitigations
 
-| Risk | Mitigation |
-|------|-----------|
-| API structure mismatch | Verified actual structs from go-api repository ✅ |
-| Performance impact | Async submission, non-blocking ✅ |
+| Risk                        | Mitigation                                              |
+| --------------------------- | ------------------------------------------------------- |
+| API structure mismatch      | Verified actual structs from go-api repository ✅       |
+| Performance impact          | Async submission, non-blocking ✅                       |
 | API failures break commands | Graceful error handling, command succeeds regardless ✅ |
-| Cross-platform issues | Platform-specific code with fallbacks ✅ |
+| Cross-platform issues       | Platform-specific code with fallbacks ✅                |
 
 ---
 
@@ -276,6 +289,7 @@ export ENABLE_FINGERPRINTING=true
 4. Finalize MVP with working UI integration
 
 **Benefits**:
+
 - ✅ MVP is **functionally complete** for enterprise use
 - ✅ Users see vulnerability data immediately
 - ✅ No workarounds needed for demo/testing
@@ -287,6 +301,7 @@ export ENABLE_FINGERPRINTING=true
 3. Plan Phase 7.7 for next sprint
 
 **Risks**:
+
 - ⚠️ MVP lacks critical enterprise functionality
 - ⚠️ Users can't see vulnerability data in UI
 - ⚠️ Not suitable for production use
@@ -298,6 +313,7 @@ export ENABLE_FINGERPRINTING=true
 **Implement Phase 7.7.1 immediately** (2-3 days) to complete the MVP with full enterprise functionality.
 
 **Rationale**:
+
 - Template execution is already working perfectly
 - API reporting is a **critical gap** for production use
 - Implementation is straightforward (verified structs, existing patterns)
@@ -320,4 +336,3 @@ export ENABLE_FINGERPRINTING=true
 **Status**: Ready for Decision
 **Recommendation**: Implement Phase 7.7.1 (2-3 days)
 **Impact**: High (Enables UI visibility, database persistence, enterprise functionality)
-

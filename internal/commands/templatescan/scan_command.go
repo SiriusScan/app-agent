@@ -12,10 +12,13 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/SiriusScan/app-agent/internal/commands"
+	"github.com/SiriusScan/app-agent/internal/commands/scan" // For package enumeration
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register module
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"    // Register module
 	"github.com/SiriusScan/app-agent/internal/template/executor"
+	"github.com/SiriusScan/app-agent/internal/template/fingerprint"
 	"github.com/SiriusScan/app-agent/internal/template/parser"
+	"github.com/SiriusScan/app-agent/internal/template/reporting"
 	"github.com/SiriusScan/app-agent/internal/template/storage"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
@@ -122,6 +125,12 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 
 	results, execErrors := executor.ExecuteTemplatesParallelWithConfig(templates, poolConfig)
 	executionTime := time.Since(startTime)
+
+	// Submit to REST API if enabled and we have matched results
+	if shouldSubmitToAPI(agentInfo, results) {
+		agentInfo.Logger.Info("Submitting template results to REST API")
+		go submitTemplateResultsToAPI(ctx, agentInfo, results, executionTime)
+	}
 
 	// Build output
 	return c.generateOutput(templates, results, discoveryErrors, execErrors, executionTime, config.Format)
@@ -377,4 +386,121 @@ type ScanConfig struct {
 	Workers        int
 	TimeoutSeconds int
 	Format         string
+}
+
+// shouldSubmitToAPI checks if we should submit results to the REST API
+func shouldSubmitToAPI(agentInfo commands.AgentInfo, results []*types.Result) bool {
+	// Don't submit if API client is not available
+	if agentInfo.APIClient == nil {
+		return false
+	}
+
+	// Don't submit if API base URL is not configured
+	if agentInfo.Config.ApiBaseURL == "" {
+		return false
+	}
+
+	// Don't submit if no results
+	if len(results) == 0 {
+		return false
+	}
+
+	// Only submit if at least one template matched
+	for _, result := range results {
+		if result != nil && result.Matched {
+			return true
+		}
+	}
+
+	return false
+}
+
+// submitTemplateResultsToAPI submits template scan results to the REST API
+// This runs asynchronously so it doesn't block the command response
+func submitTemplateResultsToAPI(
+	ctx context.Context,
+	agentInfo commands.AgentInfo,
+	results []*types.Result,
+	executionTime time.Duration,
+) {
+	startTime := time.Now()
+
+	// 1. Collect host fingerprint
+	fp, err := fingerprint.CollectBasicFingerprint(ctx, agentInfo.Config)
+	if err != nil {
+		agentInfo.Logger.Warn("Failed to collect host fingerprint, using partial data",
+			zap.Error(err))
+		// Continue with partial fingerprint (never nil)
+	}
+
+	agentInfo.Logger.Debug("Collected host fingerprint",
+		zap.String("hostname", fp.Hostname),
+		zap.String("os", fp.OS),
+		zap.String("os_version", fp.OSVersion),
+		zap.String("ip", fp.PrimaryIP))
+
+	// 2. Optional: Collect software packages (enhances reporting)
+	// This reuses the existing scan package code for package enumeration
+	var packages []scan.InstalledPackage
+	if agentInfo.ScriptingEnabled || runtime.GOOS != "windows" {
+		agentInfo.Logger.Debug("Collecting software packages for enhanced reporting")
+		
+		// Create a minimal ScanResult for package gathering
+		scanResult := &scan.ScanResult{
+			ScanErrors: make([]string, 0),
+		}
+		
+		// Use the platform-specific package gathering
+		switch runtime.GOOS {
+		case "linux":
+			packages, _ = scan.GatherLinuxPackages(ctx, agentInfo, scanResult)
+		case "darwin":
+			packages, _ = scan.GatherMacOSPackages(ctx, agentInfo, scanResult)
+		case "windows":
+			if agentInfo.ScriptingEnabled {
+				packages, _ = scan.GatherWindowsPackages(ctx, agentInfo, scanResult)
+			}
+		}
+		
+		if len(packages) > 0 {
+			agentInfo.Logger.Debug("Collected software packages",
+				zap.Int("package_count", len(packages)))
+		}
+	}
+
+	// 3. Convert template results to vulnerabilities
+	vulns := reporting.ConvertTemplateResultsToVulnerabilities(results)
+	agentInfo.Logger.Debug("Converted template results to vulnerabilities",
+		zap.Int("vulnerability_count", len(vulns)))
+
+	// 4. Build sirius.Host data
+	hostData := reporting.BuildHostData(fp, vulns)
+
+	// 5. Add software inventory if we collected packages
+	// Note: This would go into the enhanced API call if we had it
+	// For now, we'll just include it in agent_metadata
+	agentMetadata := reporting.BuildAgentMetadata(results, executionTime)
+	if len(packages) > 0 {
+		agentMetadata["package_count"] = len(packages)
+		agentMetadata["has_software_inventory"] = true
+	}
+
+	// 6. Submit to API
+	apiCtx := context.Background() // Use background context for async call
+	err = agentInfo.APIClient.UpdateHostRecord(apiCtx, agentInfo.Config.ApiBaseURL, hostData)
+
+	submissionTime := time.Since(startTime)
+
+	if err != nil {
+		agentInfo.Logger.Error("Failed to submit template results to API",
+			zap.Error(err),
+			zap.Duration("submission_time", submissionTime),
+			zap.Int("vulnerabilities", len(vulns)))
+	} else {
+		agentInfo.Logger.Info("Successfully submitted template results to API",
+			zap.Int("vulnerabilities", len(vulns)),
+			zap.Duration("submission_time", submissionTime),
+			zap.String("host_id", agentInfo.Config.HostID),
+			zap.String("agent_id", agentInfo.Config.AgentID))
+	}
 }

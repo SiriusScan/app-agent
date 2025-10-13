@@ -19,6 +19,7 @@
 **File**: `internal/template/fingerprint/fingerprint.go` (NEW)
 
 **Functionality**:
+
 ```go
 type HostFingerprint struct {
     OS          string  // runtime.GOOS
@@ -32,11 +33,13 @@ func CollectBasicFingerprint(ctx context.Context, cfg *config.AgentConfig) (*Hos
 ```
 
 **Platform Detection**:
+
 - **Windows**: `wmic os get caption,version` or registry
 - **Linux**: `/etc/os-release` or `uname -r`
 - **macOS**: `sw_vers` or `system_profiler`
 
 **Implementation Steps**:
+
 1. Create `internal/template/fingerprint/` directory
 2. Implement `fingerprint.go` with OS detection
 3. Implement `fingerprint_windows.go`, `fingerprint_linux.go`, `fingerprint_darwin.go`
@@ -44,6 +47,7 @@ func CollectBasicFingerprint(ctx context.Context, cfg *config.AgentConfig) (*Hos
 5. Handle errors gracefully (return partial data if some fails)
 
 **Success Criteria**:
+
 - ✅ Returns OS name on all platforms
 - ✅ Returns hostname on all platforms
 - ✅ Returns primary IP (best effort)
@@ -51,6 +55,7 @@ func CollectBasicFingerprint(ctx context.Context, cfg *config.AgentConfig) (*Hos
 - ✅ Completes in < 1 second
 
 **Test Strategy**:
+
 ```bash
 # Unit tests
 go test ./internal/template/fingerprint/...
@@ -66,6 +71,7 @@ go run cmd/test-fingerprint/main.go
 **File**: `internal/template/reporting/converter.go` (NEW)
 
 **Functionality**:
+
 ```go
 // Convert template results to sirius.Vulnerability format
 func ConvertTemplateResultsToVulnerabilities(results []*types.Result) []sirius.Vulnerability
@@ -78,6 +84,7 @@ func BuildAgentMetadata(results []*types.Result, executionTime time.Duration) ma
 ```
 
 **Conversion Logic**:
+
 ```go
 // For each matched template result:
 Vulnerability{
@@ -96,6 +103,7 @@ Vulnerability{
 ```
 
 **Agent Metadata Structure**:
+
 ```json
 {
   "agent_version": "1.0.0-mvp",
@@ -118,6 +126,7 @@ Vulnerability{
 ```
 
 **Implementation Steps**:
+
 1. Create `internal/template/reporting/` directory
 2. Implement `converter.go` with conversion functions
 3. Add `converter_test.go` with comprehensive tests
@@ -125,6 +134,7 @@ Vulnerability{
 5. Validate output matches `sirius.Host` schema
 
 **Success Criteria**:
+
 - ✅ Converts all matched templates to vulnerabilities
 - ✅ Preserves confidence scores
 - ✅ Maps severity to risk scores correctly
@@ -132,6 +142,7 @@ Vulnerability{
 - ✅ Includes template metadata
 
 **Test Strategy**:
+
 ```go
 func TestConvertTemplateResults(t *testing.T) {
     // Test with matched template
@@ -151,6 +162,7 @@ func TestConvertTemplateResults(t *testing.T) {
 **Changes**:
 
 **After template execution** (line ~126):
+
 ```go
 results, execErrors := executor.ExecuteTemplatesParallelWithConfig(templates, poolConfig)
 executionTime := time.Since(startTime)
@@ -158,7 +170,7 @@ executionTime := time.Since(startTime)
 // NEW: Report to REST API if we have results
 if shouldSubmitToAPI(agentInfo, results) {
     agentInfo.Logger.Info("Submitting template results to REST API")
-    
+
     // Async submission (don't block command completion)
     go submitTemplateResultsToAPI(ctx, agentInfo, results, executionTime)
 }
@@ -168,6 +180,7 @@ outputData := ScanCommandOutput{...}
 ```
 
 **New Helper Functions**:
+
 ```go
 // shouldSubmitToAPI checks if we should submit to API
 func shouldSubmitToAPI(agentInfo commands.AgentInfo, results []*types.Result) bool {
@@ -176,18 +189,18 @@ func shouldSubmitToAPI(agentInfo commands.AgentInfo, results []*types.Result) bo
     // - ApiBaseURL is empty
     // - No matched results
     // - Configuration disables API reporting
-    
+
     if agentInfo.APIClient == nil || agentInfo.Config.ApiBaseURL == "" {
         return false
     }
-    
+
     // Check if any templates matched
     for _, r := range results {
         if r != nil && r.Matched {
             return true
         }
     }
-    
+
     return false
 }
 
@@ -199,7 +212,7 @@ func submitTemplateResultsToAPI(
     executionTime time.Duration,
 ) {
     startTime := time.Now()
-    
+
     // 1. Collect host fingerprint
     hostFingerprint, err := fingerprint.CollectBasicFingerprint(ctx, agentInfo.Config)
     if err != nil {
@@ -207,21 +220,21 @@ func submitTemplateResultsToAPI(
             zap.Error(err))
         // Continue with partial fingerprint
     }
-    
+
     // 2. Convert template results to vulnerabilities
     vulnerabilities := reporting.ConvertTemplateResultsToVulnerabilities(results)
     agentInfo.Logger.Debug("Converted template results to vulnerabilities",
         zap.Int("vulnerability_count", len(vulnerabilities)))
-    
+
     // 3. Build sirius.Host data
     hostData := reporting.BuildHostData(hostFingerprint, vulnerabilities)
-    
+
     // 4. Submit to API
     apiCtx := context.Background() // Use background context for async call
     err = agentInfo.APIClient.UpdateHostRecord(apiCtx, agentInfo.Config.ApiBaseURL, hostData)
-    
+
     submissionTime := time.Since(startTime)
-    
+
     if err != nil {
         agentInfo.Logger.Error("Failed to submit template results to API",
             zap.Error(err),
@@ -236,6 +249,7 @@ func submitTemplateResultsToAPI(
 ```
 
 **Implementation Steps**:
+
 1. Add imports for fingerprint and reporting packages
 2. Add helper functions to scan_command.go
 3. Integrate API submission after template execution
@@ -244,6 +258,7 @@ func submitTemplateResultsToAPI(
 6. Add configuration flag to enable/disable API reporting
 
 **Success Criteria**:
+
 - ✅ API submission is async (doesn't block command)
 - ✅ Command succeeds even if API fails
 - ✅ Comprehensive logging of API submission
@@ -257,18 +272,21 @@ func submitTemplateResultsToAPI(
 **Test Scenarios**:
 
 1. **End-to-End Flow**
+
    - Start server and agent
    - Run `internal:template-scan --all`
    - Verify data appears in database
    - Check UI displays vulnerabilities
 
 2. **Database Verification**
+
    - Query hosts table for agent's host
    - Query vulnerabilities table for template CVEs
    - Query host_vulnerabilities junction table
    - Verify all fields populated correctly
 
 3. **API Failure Handling**
+
    - Simulate API unavailability
    - Verify command still completes
    - Check error logging
@@ -281,6 +299,7 @@ func submitTemplateResultsToAPI(
    - Verify fingerprinting works on all platforms
 
 **Test Commands**:
+
 ```bash
 # Start infrastructure
 docker-compose up -d
@@ -306,6 +325,7 @@ psql -h localhost -U postgres -d sirius -c "
 ```
 
 **Success Criteria**:
+
 - ✅ Vulnerabilities appear in database
 - ✅ Host record created/updated
 - ✅ Data visible in UI
@@ -323,11 +343,13 @@ psql -h localhost -U postgres -d sirius -c "
 #### Task 7.7.2.1: Software Package Enumeration
 
 **Platforms**:
+
 - **Windows**: Registry, winget, wmic
 - **Linux**: dpkg, rpm, apt, yum
 - **macOS**: brew, system_profiler
 
 **Data Structure**:
+
 ```json
 {
   "software_inventory": {
@@ -349,6 +371,7 @@ psql -h localhost -U postgres -d sirius -c "
 #### Task 7.7.2.2: System Fingerprinting
 
 **Components**:
+
 - Hardware: CPU, memory, storage
 - Network: interfaces, IPs, MACs, DNS
 - Services: running services, status, PIDs
@@ -358,6 +381,7 @@ psql -h localhost -U postgres -d sirius -c "
 #### Task 7.7.2.3: Enhanced API Client
 
 **New Method**:
+
 ```go
 func (a *apiClientAdapter) UpdateHostRecordWithEnhancedData(
     ctx context.Context,
@@ -382,12 +406,12 @@ func (a *apiClientAdapter) UpdateHostRecordWithEnhancedData(
 ```go
 type AgentConfig struct {
     // ... existing fields ...
-    
+
     // API Reporting Configuration
     EnableAPIReporting   bool   `env:"ENABLE_API_REPORTING" envDefault:"true"`
     ApiBaseURL          string `env:"API_BASE_URL" envDefault:"http://localhost:9001"`
     ApiTimeout          int    `env:"API_TIMEOUT" envDefault:"15"` // seconds
-    
+
     // Fingerprinting Configuration
     EnableFingerprinting bool   `env:"ENABLE_FINGERPRINTING" envDefault:"true"`
     CollectPackages      bool   `env:"COLLECT_PACKAGES" envDefault:"false"` // Phase 7.7.2
@@ -481,6 +505,7 @@ psql -h localhost -U testuser -d testdb -f testing/verify-reporting.sql
 ### Development
 
 1. **Week 1**: Tasks 7.7.1.1 & 7.7.1.2
+
    - Fingerprinting implementation
    - Conversion utilities
    - Unit tests
@@ -508,13 +533,13 @@ psql -h localhost -U testuser -d testdb -f testing/verify-reporting.sql
 
 ## Risks & Mitigations
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| API structure mismatch | High | Validate with server team first |
-| Performance degradation | Medium | Async submission, timeout limits |
-| Cross-platform issues | Medium | Comprehensive testing, graceful fallbacks |
-| Database schema changes | High | Coordinate with API team |
-| API unavailability | Low | Async call, error handling |
+| Risk                    | Impact | Mitigation                                |
+| ----------------------- | ------ | ----------------------------------------- |
+| API structure mismatch  | High   | Validate with server team first           |
+| Performance degradation | Medium | Async submission, timeout limits          |
+| Cross-platform issues   | Medium | Comprehensive testing, graceful fallbacks |
+| Database schema changes | High   | Coordinate with API team                  |
+| API unavailability      | Low    | Async call, error handling                |
 
 ---
 
@@ -546,14 +571,17 @@ psql -h localhost -U testuser -d testdb -f testing/verify-reporting.sql
 ### Files to Update
 
 1. **AGENT-COMMANDS-REFERENCE.md**
+
    - Add API reporting behavior
    - Document configuration options
 
 2. **PHASE-7.6-COMPLETION-SUMMARY.md**
+
    - Add note about API reporting
    - Update architecture diagram
 
 3. **README.md**
+
    - Update feature list
    - Add API integration documentation
 
@@ -587,4 +615,3 @@ psql -h localhost -U testuser -d testdb -f testing/verify-reporting.sql
 **Status**: Ready for Implementation
 **Estimated Effort**: Phase 7.7.1 = 2-3 days, Phase 7.7.2 = 1-2 weeks
 **Priority**: High (Phase 7.7.1), Medium (Phase 7.7.2)
-

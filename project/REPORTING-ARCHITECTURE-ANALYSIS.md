@@ -44,11 +44,12 @@ apiClient.UpdateHostRecordWithEnhancedData(ctx, apiURL, hostData, softwareInvent
 ```
 
 **Data Flow:**
+
 ```
-Agent Scan → Fingerprint + Packages + Templates → 
-Convert to sirius.Host → 
-POST /host API → 
-Database Storage → 
+Agent Scan → Fingerprint + Packages + Templates →
+Convert to sirius.Host →
+POST /host API →
+Database Storage →
 UI Display
 ```
 
@@ -66,10 +67,11 @@ return JSON(results) // Via gRPC, that's it
 ```
 
 **Data Flow:**
+
 ```
-Agent Scan → Template Results → 
-JSON via gRPC → 
-Server Console → 
+Agent Scan → Template Results →
+JSON via gRPC →
+Server Console →
 ❌ NOT STORED ❌
 ```
 
@@ -82,6 +84,7 @@ Server Console →
 **Endpoint**: `POST {apiBaseURL}/host`
 
 **Required Structure**:
+
 ```json
 {
   "hid": "agent-unique-id",
@@ -105,6 +108,7 @@ Server Console →
 ```
 
 **Enhanced Data** (JSONB fields in database):
+
 ```json
 {
   "software_inventory": {
@@ -137,6 +141,7 @@ Server Console →
 **File**: `internal/apiclient/client.go`
 
 **Available Methods**:
+
 ```go
 // ONLY basic method exists:
 UpdateHostRecord(ctx, apiBaseURL, hostData sirius.Host) error
@@ -153,18 +158,19 @@ UpdateHostRecordWithEnhancedData(ctx, apiBaseURL, hostData, softwareInventory, s
 
 ### Missing Components
 
-| Component | Old System | New System | Status |
-|-----------|------------|------------|--------|
-| Template Execution | ✅ | ✅ | **Working** |
-| Host Fingerprinting | ✅ | ❌ | **Missing** |
-| Package Enumeration | ✅ | ❌ | **Missing** |
-| API Reporting | ✅ | ❌ | **Missing** |
-| Database Storage | ✅ | ❌ | **Missing** |
-| Agent Metadata | ✅ | ❌ | **Missing** |
+| Component           | Old System | New System | Status      |
+| ------------------- | ---------- | ---------- | ----------- |
+| Template Execution  | ✅         | ✅         | **Working** |
+| Host Fingerprinting | ✅         | ❌         | **Missing** |
+| Package Enumeration | ✅         | ❌         | **Missing** |
+| API Reporting       | ✅         | ❌         | **Missing** |
+| Database Storage    | ✅         | ❌         | **Missing** |
+| Agent Metadata      | ✅         | ❌         | **Missing** |
 
 ### Data Collection Gaps
 
 **Host Fingerprinting (Missing)**:
+
 - Operating system (runtime.GOOS)
 - OS version (via wmic, uname, etc.)
 - Hostname (os.Hostname())
@@ -172,11 +178,13 @@ UpdateHostRecordWithEnhancedData(ctx, apiBaseURL, hostData, softwareInventory, s
 - Agent ID (from config)
 
 **Package Enumeration (Missing)**:
+
 - Windows: Registry, winget
 - Linux: dpkg, rpm, apt
 - macOS: brew, system_profiler
 
 **System Fingerprint (Missing)**:
+
 - CPU info (cores, model, architecture)
 - Memory (total, available)
 - Storage (disks, filesystems)
@@ -193,6 +201,7 @@ UpdateHostRecordWithEnhancedData(ctx, apiBaseURL, hostData, softwareInventory, s
 **Location**: `internal/commands/templatescan/scan_command.go`
 
 **Current Code** (lines 109-126):
+
 ```go
 // Execute templates with worker pool
 startTime := time.Now()
@@ -215,21 +224,22 @@ return c.generateOutput(...)  // Only returns JSON via gRPC
 ```
 
 **Needed Addition** (after line 126):
+
 ```go
 // NEW: Report to API if we have vulnerabilities
 if shouldReportToAPI(results) {
     // 1. Collect host fingerprint
     hostFingerprint := collectHostFingerprint(ctx, agentInfo)
-    
+
     // 2. Convert template results to vulnerabilities
     vulnerabilities := convertTemplateResultsToVulnerabilities(results)
-    
+
     // 3. Build sirius.Host
     hostData := buildHostData(agentInfo, hostFingerprint, vulnerabilities)
-    
+
     // 4. Build agent metadata
     agentMetadata := buildAgentMetadata(results, executionTime)
-    
+
     // 5. Submit to API (async)
     go func() {
         err := agentInfo.APIClient.UpdateHostRecord(ctx, agentInfo.Config.ApiBaseURL, hostData)
@@ -252,6 +262,7 @@ if shouldReportToAPI(results) {
 **Scope**: Add REST API reporting to template-scan command only
 
 **Components**:
+
 1. Basic host fingerprinting (OS, hostname, IP)
 2. Convert template results → vulnerabilities
 3. Submit to `POST /host` endpoint
@@ -259,11 +270,13 @@ if shouldReportToAPI(results) {
 
 **Effort**: Small (1-2 tasks)
 **Benefits**:
+
 - Vulnerabilities appear in UI immediately
 - No package enumeration complexity
 - Works with existing API
 
 **Limitations**:
+
 - No software inventory
 - No detailed system fingerprint
 - Minimal host data
@@ -273,6 +286,7 @@ if shouldReportToAPI(results) {
 **Scope**: Match old agent capabilities completely
 
 **Components**:
+
 1. Full host fingerprinting (OS, version, hostname, IP, CPE)
 2. Package enumeration (platform-specific)
 3. System fingerprint (CPU, memory, network, services)
@@ -282,12 +296,14 @@ if shouldReportToAPI(results) {
 
 **Effort**: Large (4-5 tasks, Phase 7.7)
 **Benefits**:
+
 - Complete host visibility
 - Software inventory tracking
 - Rich system fingerprinting
 - Full UI integration
 
 **Limitations**:
+
 - More complex implementation
 - Platform-specific code needed
 - Longer development time
@@ -295,18 +311,21 @@ if shouldReportToAPI(results) {
 ### Option 3: Hybrid Approach (Recommended)
 
 **Phase 7.7.1: Quick Win** (Implement Now)
+
 - Basic host fingerprinting
 - Template results → vulnerabilities conversion
 - Simple REST API submission
 - Immediate UI visibility
 
 **Phase 7.7.2: Full Enhancement** (Future Sprint)
+
 - Software package enumeration
 - System fingerprinting
 - Enhanced JSONB data submission
 - Complete feature parity
 
 **Benefits**:
+
 - ✅ Fast time-to-value
 - ✅ Incremental enhancement
 - ✅ Reduced risk
@@ -319,12 +338,14 @@ if shouldReportToAPI(results) {
 ### Immediate Actions (Phase 7.7.1)
 
 **Task 1: Basic Host Fingerprinting**
+
 - File: `internal/template/fingerprint/fingerprint.go`
 - Methods:
   - `GetOSInfo() OSInfo` → OS, version, hostname, primary IP
   - `GetAgentID()` → from config
 
 **Task 2: Result Conversion**
+
 - File: `internal/template/reporting/converter.go`
 - Methods:
   - `ConvertTemplateResultsToVulnerabilities(results) []Vulnerability`
@@ -332,12 +353,14 @@ if shouldReportToAPI(results) {
   - `BuildAgentMetadata(results, duration) map[string]interface{}`
 
 **Task 3: API Submission**
+
 - File: `internal/commands/templatescan/scan_command.go`
 - Add: API submission after template execution
 - Async submission (don't block command completion)
 - Error handling and logging
 
 **Task 4: Testing**
+
 - Verify data appears in database
 - Check UI display
 - Validate vulnerability linking
@@ -346,11 +369,13 @@ if shouldReportToAPI(results) {
 ### Future Enhancements (Phase 7.7.2)
 
 1. **Package Enumeration**
+
    - Windows: Registry, winget
    - Linux: dpkg, rpm
    - macOS: brew
 
 2. **System Fingerprinting**
+
    - Hardware details
    - Network configuration
    - Running services
@@ -440,18 +465,21 @@ Template Scan → Execute Templates → Results
 ### Recommended Action Plan
 
 1. **Create Phase 7.7.1 Tasks** (NOW)
+
    - Task 7.7.1.1: Basic host fingerprinting
    - Task 7.7.1.2: Result conversion utilities
    - Task 7.7.1.3: API submission integration
    - Task 7.7.1.4: Integration testing
 
 2. **Implement & Test** (1-2 days)
+
    - Build fingerprinting
    - Build conversion logic
    - Add API submission
    - Verify database storage
 
 3. **Validate with Server** (QA)
+
    - Check data appears in UI
    - Verify vulnerability linking
    - Test multiple agents
@@ -485,4 +513,3 @@ The new template system is **functionally complete** for template execution but 
 - ❌ No compliance reporting
 
 **Recommendation**: Implement **Phase 7.7.1 (Hybrid Option)** to add basic REST API reporting while keeping template execution enhancements as the primary MVP value.
-

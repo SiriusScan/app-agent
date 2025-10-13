@@ -15,9 +15,9 @@ import (
 
 var errPackageManagerNotFound = errors.New("no supported package manager (dpkg or rpm) found")
 
-// gatherLinuxPackages collects installed software information on Linux.
+// GatherLinuxPackages collects installed software information on Linux.
 // It detects dpkg or rpm and queries the installed packages.
-func gatherLinuxPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
+func GatherLinuxPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
 	agentInfo.Logger.Info("Gathering Linux packages")
 	var pkgs []InstalledPackage
 	var err error

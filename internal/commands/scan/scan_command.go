@@ -114,11 +114,11 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 func (c *ScanCommand) gatherPlatformPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
 	switch runtime.GOOS {
 	case "linux":
-		return gatherLinuxPackages(ctx, agentInfo, result)
+		return GatherLinuxPackages(ctx, agentInfo, result)
 	case "windows":
-		return gatherWindowsPackages(ctx, agentInfo, result)
+		return GatherWindowsPackages(ctx, agentInfo, result)
 	case "darwin":
-		return gatherMacOSPackages(ctx, agentInfo, result)
+		return GatherMacOSPackages(ctx, agentInfo, result)
 	default:
 		msg := fmt.Sprintf("Package gathering not supported for OS: %s", runtime.GOOS)
 		result.ScanErrors = append(result.ScanErrors, msg)

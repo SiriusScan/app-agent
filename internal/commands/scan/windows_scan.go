@@ -11,9 +11,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// gatherWindowsPackages collects installed software information on Windows.
+// GatherWindowsPackages collects installed software information on Windows.
 // It uses PowerShell to query the registry's Uninstall keys.
-func gatherWindowsPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
+func GatherWindowsPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
 	if !agentInfo.ScriptingEnabled {
 		msg := "Scripting disabled or PowerShell not found, cannot gather Windows packages."
 		agentInfo.Logger.Warn(msg)

@@ -12,9 +12,9 @@ import (
 	"go.uber.org/zap"
 )
 
-// gatherMacOSPackages collects installed software information on macOS.
+// GatherMacOSPackages collects installed software information on macOS.
 // Currently, it primarily targets packages installed via Homebrew.
-func gatherMacOSPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
+func GatherMacOSPackages(ctx context.Context, agentInfo commands.AgentInfo, result *ScanResult) ([]InstalledPackage, error) {
 	agentInfo.Logger.Info("Gathering macOS packages (via Homebrew)")
 
 	brewPath, err := exec.LookPath("brew")
