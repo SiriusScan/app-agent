@@ -10,8 +10,11 @@ import (
 	"syscall"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/parser"
+	"github.com/SiriusScan/app-agent/internal/template/storage"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 	"github.com/spf13/cobra"
 )
@@ -80,9 +83,16 @@ func newTemplateRunAllCommand() *cobra.Command {
 	var timeout int
 
 	cmd := &cobra.Command{
-		Use:   "run-all <directory>",
-		Short: "Run all templates in a directory",
-		Long: `Discover and execute all templates in the specified directory.
+		Use:   "run-all [directory]",
+		Short: "Run all templates",
+		Long: `Discover and execute all templates.
+
+Without a directory argument, uses the template manager to discover templates from:
+  1. Custom templates (highest priority)
+  2. Server-synced templates
+  3. Built-in templates (embedded in binary)
+
+With a directory argument, scans only that specific directory.
 
 The command will:
   1. Recursively find all .yaml/.yml files
@@ -91,14 +101,13 @@ The command will:
   4. Output results (one per line in JSONL format, or summary in text format)
 
 Examples:
-  sirius-agent template run-all ./templates/
+  sirius-agent template run-all                          # Use template manager
+  sirius-agent template run-all ./templates/              # Specific directory
   sirius-agent template run-all /etc/sirius/templates/ --format text
   sirius-agent template run-all ./templates/ --workers 10
-  sirius-agent template run-all ./templates/ --workers 1 --timeout 300`,
-		Args: cobra.ExactArgs(1),
+  sirius-agent template run-all --workers 1 --timeout 300`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			directory := args[0]
-
 			// Validate worker count
 			if workers > 0 {
 				if err := executor.ValidateWorkerCount(workers); err != nil {
@@ -119,17 +128,44 @@ Examples:
 				cancel()
 			}()
 
-			templates, errors := parser.DiscoverTemplatesWithContext(ctx, directory)
+			var templates []*types.Template
+			var errors []error
 
-			if len(errors) > 0 && format == "text" {
-				fmt.Fprintf(os.Stderr, "⚠️  Discovery errors:\n")
-				for _, err := range errors {
-					fmt.Fprintf(os.Stderr, "  - %v\n", err)
+			if len(args) > 0 {
+				// Specific directory provided
+				directory := args[0]
+				templates, errors = parser.DiscoverTemplatesWithContext(ctx, directory)
+
+				if len(errors) > 0 && format == "text" {
+					fmt.Fprintf(os.Stderr, "⚠️  Discovery errors:\n")
+					for _, err := range errors {
+						fmt.Fprintf(os.Stderr, "  - %v\n", err)
+					}
 				}
-			}
 
-			if len(templates) == 0 {
-				return fmt.Errorf("no valid templates found in %s", directory)
+				if len(templates) == 0 {
+					return fmt.Errorf("no valid templates found in %s", directory)
+				}
+			} else {
+				// Use template manager
+				logger := zap.NewNop() // Use production logger if available
+				manager, err := storage.NewManager(logger)
+				if err != nil {
+					return fmt.Errorf("failed to initialize template manager: %w", err)
+				}
+
+				templates, err = manager.DiscoverTemplates(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to discover templates: %w", err)
+				}
+
+				if len(templates) == 0 {
+					return fmt.Errorf("no templates available. Install templates in %s or specify a directory", manager.GetStoragePath())
+				}
+
+				if format == "text" {
+					fmt.Fprintf(os.Stderr, "📁 Using template manager (base: %s)\n", manager.GetStoragePath())
+				}
 			}
 
 			// Configure worker pool

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"runtime"
 	"strconv"
 	"strings"
@@ -17,6 +16,7 @@ import (
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"    // Register module
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/parser"
+	"github.com/SiriusScan/app-agent/internal/template/storage"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
 
@@ -47,7 +47,7 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 	var discoveryErrors []error
 
 	if config.TemplatePath != "" {
-		// Single template
+		// Single template (explicit file path)
 		template, err := parser.ParseTemplate(config.TemplatePath)
 		if err != nil {
 			return "", fmt.Errorf("failed to parse template %q: %w", config.TemplatePath, err)
@@ -56,38 +56,19 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 			return "", fmt.Errorf("template %q is invalid: %w", config.TemplatePath, err)
 		}
 		templates = []*types.Template{template}
-	} else {
-		// Directory scan
-		directory := config.Directory
-		if directory == "" {
-			// Try multiple default directories in order of preference
-			defaultDirs := []string{
-				"/app-agent/custom-templates",
-				"/app-agent/templates",
-				"./testing/test-templates",
-				"./templates",
-			}
-
-			for _, dir := range defaultDirs {
-				if stat, err := os.Stat(dir); err == nil && stat.IsDir() {
-					directory = dir
-					agentInfo.Logger.Info("Using default template directory",
-						zap.String("directory", directory))
-					break
-				}
-			}
-
-			if directory == "" {
-				return "", fmt.Errorf("no template directory found. Tried: %v. Use --directory to specify location", defaultDirs)
-			}
-		}
-
-		agentInfo.Logger.Info("Discovering templates",
-			zap.String("directory", directory))
-		templates, discoveryErrors = parser.DiscoverTemplatesWithContext(ctx, directory)
+		
+		agentInfo.Logger.Info("Running single template",
+			zap.String("path", config.TemplatePath))
+			
+	} else if config.Directory != "" {
+		// Specific directory (bypasses manager, uses direct path)
+		agentInfo.Logger.Info("Discovering templates from directory",
+			zap.String("directory", config.Directory))
+			
+		templates, discoveryErrors = parser.DiscoverTemplatesWithContext(ctx, config.Directory)
 
 		if len(templates) == 0 {
-			errMsg := fmt.Sprintf("no valid templates found in %q", directory)
+			errMsg := fmt.Sprintf("no valid templates found in %q", config.Directory)
 			if len(discoveryErrors) > 0 {
 				errMsg += fmt.Sprintf(" (%d discovery errors)", len(discoveryErrors))
 				for i, err := range discoveryErrors {
@@ -101,6 +82,28 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 			}
 			return "", fmt.Errorf(errMsg)
 		}
+		
+	} else {
+		// Use template manager (discovers from all sources: custom > server > builtin)
+		agentInfo.Logger.Info("Using template manager for discovery")
+		
+		manager, err := storage.NewManager(agentInfo.Logger)
+		if err != nil {
+			return "", fmt.Errorf("failed to initialize template manager: %w", err)
+		}
+
+		templates, err = manager.DiscoverTemplates(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to discover templates: %w", err)
+		}
+
+		if len(templates) == 0 {
+			return "", fmt.Errorf("no templates available. Try installing templates in %s or use --directory", manager.GetStoragePath())
+		}
+		
+		agentInfo.Logger.Info("Discovered templates from manager",
+			zap.Int("count", len(templates)),
+			zap.String("base_dir", manager.GetStoragePath()))
 	}
 
 	// Execute templates with worker pool

@@ -1,0 +1,28 @@
+id: CVE-2024-TEST-007
+info:
+  name: SSL/TLS Disabled in Configuration
+  author: Sirius Scan
+  severity: high
+  description: Detects disabled SSL/TLS in database configurations
+  references:
+    - https://owasp.org/www-project-top-ten/2017/A3_2017-Sensitive_Data_Exposure
+  tags:
+    - ssl
+    - tls
+    - encryption
+    - configuration
+  version: "1.0.0"
+
+detection:
+  logic: all
+  steps:
+    - type: file_content
+      platforms:
+        - linux
+        - darwin
+        - windows
+      weight: 1.0
+      config:
+        path: testing/test-data/vulnerable-config.conf
+        regex: 'ssl_mode\s*=\s*disable'
+
