@@ -128,3 +128,5 @@ func TestIsColorEnabled(t *testing.T) {
 	// Restore
 	os.Setenv("NO_COLOR", oldNoColor)
 }
+
+

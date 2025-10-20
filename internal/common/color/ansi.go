@@ -84,3 +84,5 @@ func ColorizedSeverity(severity string) string {
 	color := SeverityColor(severity)
 	return Colorize(strings.ToUpper(severity), color+Bold)
 }
+
+

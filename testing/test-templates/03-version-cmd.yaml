@@ -26,3 +26,4 @@ detection:
           - "--version"
         regex: 'version (\d+\.\d+\.\d+)'
 
+

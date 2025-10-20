@@ -21,7 +21,8 @@ type DiscoverCommand struct {
 var _ commands.Command = (*DiscoverCommand)(nil)
 
 func init() {
-	commands.Register("discover-templates", &DiscoverCommand{})
+	// Register the command with its canonical prefix
+	// Aliases (discover, discover-templates) are registered in aliases.go
 	commands.Register("internal:discover-templates", &DiscoverCommand{})
 }
 

@@ -21,7 +21,8 @@ type ListCommand struct {
 var _ commands.Command = (*ListCommand)(nil)
 
 func init() {
-	commands.Register("list-templates", &ListCommand{})
+	// Register the command with its canonical prefix
+	// Aliases (templates, list-templates) are registered in aliases.go
 	commands.Register("internal:list-templates", &ListCommand{})
 }
 

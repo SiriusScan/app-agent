@@ -186,4 +186,3 @@ func init() {
 		panic(fmt.Sprintf("failed to register version_cmd module: %v", err))
 	}
 }
-

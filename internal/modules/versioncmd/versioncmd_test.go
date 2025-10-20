@@ -76,16 +76,16 @@ func TestCommandVersionModule_Execute_ExitCode(t *testing.T) {
 	}
 
 	tests := []struct {
-		name         string
-		config       map[string]interface{}
-		expectMatch  bool
-		expectError  bool
+		name        string
+		config      map[string]interface{}
+		expectMatch bool
+		expectError bool
 	}{
 		{
 			name: "Exit code 0 expected and received",
 			config: map[string]interface{}{
 				"command":   []interface{}{"true"}, // Unix true command, exits 0
-				"regex":     ".*",                   // Match anything
+				"regex":     ".*",                  // Match anything
 				"exit_code": 0,
 			},
 			expectMatch: true,
@@ -132,7 +132,7 @@ func TestCommandVersionModule_Execute_ExitCode(t *testing.T) {
 
 func TestCommandVersionModule_Execute_Timeout(t *testing.T) {
 	t.Skip("Skipping timeout test - flaky due to timing and regex matching empty output")
-	
+
 	// Note: Timeout handling is still implemented in the module, this test is just skipped
 	// because the behavior depends on exact timing which can vary by system/load
 }
@@ -248,10 +248,10 @@ func TestCommandVersionModule_Execute_RegexExtraction(t *testing.T) {
 	module := &CommandVersionModule{}
 
 	tests := []struct {
-		name            string
-		config          map[string]interface{}
-		expectMatch     bool
-		expectVersion   string
+		name          string
+		config        map[string]interface{}
+		expectMatch   bool
+		expectVersion string
 	}{
 		{
 			name: "Capture group extraction",
@@ -353,4 +353,3 @@ func TestCommandVersionModule_Execute_SecurityNoShellInjection(t *testing.T) {
 	t.Logf("  ✅ Command executed without shell interpretation")
 	t.Logf("  ✅ Result matched: %v", result.Matched)
 }
-

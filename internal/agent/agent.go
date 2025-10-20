@@ -16,6 +16,7 @@ import (
 	// Import for Host struct
 
 	"github.com/SiriusScan/app-agent/internal/commands"
+	_ "github.com/SiriusScan/app-agent/internal/commands/help"         // Import for side-effect (registration)
 	_ "github.com/SiriusScan/app-agent/internal/commands/scan"         // Import for side-effect (registration)
 	_ "github.com/SiriusScan/app-agent/internal/commands/status"       // Import for side-effect (registration)
 	_ "github.com/SiriusScan/app-agent/internal/commands/templatescan" // Import for side-effect (registration)
@@ -41,6 +42,9 @@ type Agent struct {
 
 // NewAgent creates a new HelloService client (agent)
 func NewAgent(cfg *config.AgentConfig, logger *zap.Logger) *Agent {
+	// Register built-in command aliases after all commands have been registered
+	commands.RegisterBuiltinAliases()
+
 	psPath := cfg.PowerShellPath
 	psFound := false
 	var findErr error
