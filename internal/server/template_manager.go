@@ -12,7 +12,6 @@ import (
 
 	"github.com/SiriusScan/app-agent/internal/template/types"
 	templatevalkey "github.com/SiriusScan/app-agent/internal/template/valkey"
-	pb "github.com/SiriusScan/app-agent/proto/hello"
 )
 
 // ServerTemplateManager manages templates on the server side
@@ -225,7 +224,7 @@ func (tm *ServerTemplateManager) pushToAgents(ctx context.Context, template *typ
 	agentCount := len(tm.server.agents)
 	for agentID := range tm.server.agents {
 		// Use the existing command sending mechanism
-		if err := tm.server.SendCommandToAgent(ctx, agentID, command); err != nil {
+		if err := tm.server.SendCommandToAgent(agentID, command); err != nil {
 			tm.logger.Error("Failed to send template sync command to agent",
 				zap.String("agent_id", agentID),
 				zap.String("template_id", template.ID),
