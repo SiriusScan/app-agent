@@ -141,17 +141,7 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 	var valkeyClient valkey.Client = nil
 	logger.Info("ValKey client initialized (nil for now - needs configuration)")
 
-	// Initialize template manager
-	templateConfig := &TemplateConfig{
-		RepoURL:         "https://github.com/SiriusScan/sirius-agent-modules",
-		RepoPath:        "/var/sirius/template-repos/sirius-agent-modules",
-		SyncInterval:    24 * time.Hour,
-		MaxTemplateSize: 1024 * 1024, // 1MB
-	}
-	
-	templateManager := NewServerTemplateManager(valkeyClient, logger, templateConfig)
-	logger.Info("Template manager initialized")
-
+	// Create server instance first
 	server := &Server{
 		logger:          logger,
 		config:          cfg,
@@ -159,10 +149,21 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 		agents:          make(map[string]pb.HelloService_ConnectStreamServer),
 		commands:        make(map[string]*CommandStatus),
 		responseStore:   responseStore,
-		templateManager: templateManager,
 		valkeyClient:    valkeyClient,
 		pendingCommands: make(map[string]string),
 	}
+
+	// Initialize template manager with server reference
+	templateConfig := &TemplateConfig{
+		RepoURL:         "https://github.com/SiriusScan/sirius-agent-modules",
+		RepoPath:        "/var/sirius/template-repos/sirius-agent-modules",
+		SyncInterval:    24 * time.Hour,
+		MaxTemplateSize: 1024 * 1024, // 1MB
+	}
+	
+	templateManager := NewServerTemplateManager(valkeyClient, logger, templateConfig, server)
+	server.templateManager = templateManager
+	logger.Info("Template manager initialized")
 
 	// Start periodic template sync (only if ValKey client is available)
 	// For now, we'll start it anyway since the template manager handles nil clients gracefully

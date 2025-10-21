@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"strings"
 	"time"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/SiriusScan/app-agent/internal/template/types"
 	templatevalkey "github.com/SiriusScan/app-agent/internal/template/valkey"
+	pb "github.com/SiriusScan/app-agent/proto/hello"
 )
 
 // ServerTemplateManager manages templates on the server side
@@ -20,6 +22,7 @@ type ServerTemplateManager struct {
 	githubSync   *templatevalkey.GitHubSyncManager
 	logger       *zap.Logger
 	config       *TemplateConfig
+	server       *Server // Reference to server for agent communication
 }
 
 // TemplateConfig contains configuration for template management
@@ -31,7 +34,7 @@ type TemplateConfig struct {
 }
 
 // NewServerTemplateManager creates a new server template manager
-func NewServerTemplateManager(valkeyClient valkey.Client, logger *zap.Logger, config *TemplateConfig) *ServerTemplateManager {
+func NewServerTemplateManager(valkeyClient valkey.Client, logger *zap.Logger, config *TemplateConfig, server *Server) *ServerTemplateManager {
 	// Create ValKey storage
 	storage := templatevalkey.NewValKeyTemplateStorage(valkeyClient, logger)
 
@@ -44,6 +47,7 @@ func NewServerTemplateManager(valkeyClient valkey.Client, logger *zap.Logger, co
 		githubSync:   githubSync,
 		logger:       logger,
 		config:       config,
+		server:       server,
 	}
 }
 
@@ -87,7 +91,7 @@ func (tm *ServerTemplateManager) StoreCustomTemplate(ctx context.Context, templa
 	}
 
 	// Push to online agents immediately
-	if err := tm.pushToAgents(ctx, template); err != nil {
+	if err := tm.pushToAgents(ctx, template, content); err != nil {
 		tm.logger.Warn("Failed to push template to agents", zap.Error(err))
 	}
 
@@ -201,18 +205,50 @@ func (tm *ServerTemplateManager) updateCustomTemplateManifest(ctx context.Contex
 	return tm.storage.UpdateTemplateManifest(ctx, manifest)
 }
 
-// pushToAgents pushes a template to all online agents
-func (tm *ServerTemplateManager) pushToAgents(ctx context.Context, template *types.Template) error {
-	// This would integrate with the existing gRPC stream infrastructure
-	// For now, we'll log the action
+// pushToAgents pushes a template to all online agents using command system
+func (tm *ServerTemplateManager) pushToAgents(ctx context.Context, template *types.Template, content []byte) error {
+	if tm.server == nil {
+		tm.logger.Warn("Cannot push template - server reference not available")
+		return nil
+	}
+
 	tm.logger.Info("Pushing template to agents",
 		zap.String("template_id", template.ID),
 		zap.String("severity", string(template.Info.Severity)))
 
-	// TODO: Implement actual agent push via gRPC streams
-	// This would use the existing server.agents map and send TemplateUpdate messages
+	// For the demo, we'll use the existing command system to trigger template sync
+	// This is simpler than modifying proto files and still demonstrates the functionality
+	command := "internal:template sync"
+	
+	// Send sync command to all connected agents
+	tm.server.agentsMutex.RLock()
+	agentCount := len(tm.server.agents)
+	for agentID := range tm.server.agents {
+		// Use the existing command sending mechanism
+		if err := tm.server.SendCommandToAgent(ctx, agentID, command); err != nil {
+			tm.logger.Error("Failed to send template sync command to agent",
+				zap.String("agent_id", agentID),
+				zap.String("template_id", template.ID),
+				zap.Error(err))
+		} else {
+			tm.logger.Debug("Template sync command sent to agent",
+				zap.String("agent_id", agentID),
+				zap.String("template_id", template.ID))
+		}
+	}
+	tm.server.agentsMutex.RUnlock()
+
+	tm.logger.Info("Template push completed",
+		zap.String("template_id", template.ID),
+		zap.Int("agents_notified", agentCount))
 
 	return nil
+}
+
+// calculateChecksum calculates SHA256 checksum of content
+func (tm *ServerTemplateManager) calculateChecksum(content []byte) string {
+	hash := sha256.Sum256(content)
+	return fmt.Sprintf("sha256:%x", hash)
 }
 
 // performSecurityScan performs security validation on template content

@@ -46,6 +46,8 @@ enum MessageType {
   COMMAND = 2;
   RESULT = 3;
   ACKNOWLEDGMENT = 4;
+  TEMPLATE_UPDATE = 5;
+  TEMPLATE_SYNC_REQUEST = 6;
 }
 
 // AgentMessage is sent from the agent to the server
@@ -55,6 +57,7 @@ message AgentMessage {
   oneof payload {
     HeartbeatMessage heartbeat = 3;
     CommandResult result = 4;
+    TemplateSyncRequest sync_request = 5;
   }
 }
 
@@ -65,6 +68,7 @@ message ServerMessage {
   oneof payload {
     CommandRequest command = 3;
     Acknowledgment acknowledgment = 4;
+    TemplateUpdate template_update = 5;
   }
 }
 
@@ -88,4 +92,20 @@ message CommandResult {
 message Acknowledgment {
   string command_id = 1;
   string status = 2;
-} 
+}
+
+// TemplateUpdate is sent from server to agent when a template is updated
+message TemplateUpdate {
+  string template_id = 1;
+  string version = 2;
+  string checksum = 3;
+  string content = 4;
+  bool is_custom = 5;
+  int64 timestamp = 6;
+}
+
+// TemplateSyncRequest is sent from agent to server to request template sync
+message TemplateSyncRequest {
+  string agent_id = 1;
+  int64 last_sync = 2; // Timestamp of last successful sync
+}
