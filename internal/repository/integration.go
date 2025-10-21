@@ -46,6 +46,8 @@ func (ri *RepositoryIntegration) Initialize(ctx context.Context) error {
 	ri.logger.Info("Performing initial template sync from server")
 	if err := ri.syncManager.SyncFromServer(ctx); err != nil {
 		ri.logger.Warn("Initial template sync failed, continuing with cached templates", zap.Error(err))
+		// This is expected if the server doesn't have ValKey configured yet
+		ri.logger.Info("Template sync will be available once server ValKey is configured")
 	} else {
 		ri.logger.Info("Initial template sync completed successfully")
 	}

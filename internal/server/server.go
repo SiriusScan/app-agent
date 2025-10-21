@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	valkey "github.com/valkey-io/valkey-go"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -110,7 +111,9 @@ type Server struct {
 	pendingCommandsMutex sync.Mutex
 	pendingCommands      map[string]string // Key: agentID:commandString, Value: agentID:timestampID
 
-	// valkey *valkey.Valkey // Commented out due to import error
+	// Template management
+	templateManager *ServerTemplateManager
+	valkeyClient    valkey.Client
 }
 
 // NewServer creates a new HelloService server
@@ -132,24 +135,41 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 		return nil, fmt.Errorf("failed to create response store: %w", err)
 	}
 
-	/* // Commented out due to import error
-	valkeyInstance, err := valkey.NewValkey()
-	if err != nil {
-		logger.Error("Failed to create Valkey instance", zap.Error(err))
-		return nil, fmt.Errorf("failed to create Valkey instance: %w", err)
-	}
-	*/
+	// Initialize ValKey client for template storage
+	// For now, we'll create a nil client since ValKey integration needs to be configured
+	// In a real deployment, this would connect to the ValKey instance
+	var valkeyClient valkey.Client = nil
+	logger.Info("ValKey client initialized (nil for now - needs configuration)")
 
-	return &Server{
-		logger:        logger,
-		config:        cfg,
-		logFile:       logFile,
-		agents:        make(map[string]pb.HelloService_ConnectStreamServer),
-		commands:      make(map[string]*CommandStatus),
-		responseStore: responseStore,
-		// valkey:        valkeyInstance, // Commented out due to import error
+	// Initialize template manager
+	templateConfig := &TemplateConfig{
+		RepoURL:         "https://github.com/SiriusScan/sirius-agent-modules",
+		RepoPath:        "/var/sirius/template-repos/sirius-agent-modules",
+		SyncInterval:    24 * time.Hour,
+		MaxTemplateSize: 1024 * 1024, // 1MB
+	}
+	
+	templateManager := NewServerTemplateManager(valkeyClient, logger, templateConfig)
+	logger.Info("Template manager initialized")
+
+	server := &Server{
+		logger:          logger,
+		config:          cfg,
+		logFile:         logFile,
+		agents:          make(map[string]pb.HelloService_ConnectStreamServer),
+		commands:        make(map[string]*CommandStatus),
+		responseStore:   responseStore,
+		templateManager: templateManager,
+		valkeyClient:    valkeyClient,
 		pendingCommands: make(map[string]string),
-	}, nil
+	}
+
+	// Start periodic template sync (only if ValKey client is available)
+	// For now, we'll start it anyway since the template manager handles nil clients gracefully
+	go server.startTemplateSync()
+	logger.Info("Template sync started (will be limited without ValKey client)")
+
+	return server, nil
 }
 
 // Ping implements the Ping RPC method
@@ -831,4 +851,36 @@ func (s *Server) ListPendingCommands() []*CommandStatus {
 		}
 	}
 	return pending
+}
+
+// startTemplateSync starts the periodic template synchronization
+func (s *Server) startTemplateSync() {
+	s.logger.Info("Starting periodic template sync")
+	
+	ticker := time.NewTicker(s.templateManager.config.SyncInterval)
+	defer ticker.Stop()
+	
+	// Perform initial sync
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	
+	if err := s.templateManager.SyncFromGitHub(ctx); err != nil {
+		s.logger.Error("Initial template sync failed", zap.Error(err))
+	} else {
+		s.logger.Info("Initial template sync completed successfully")
+	}
+	
+	// Periodic sync
+	for {
+		select {
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			if err := s.templateManager.SyncFromGitHub(ctx); err != nil {
+				s.logger.Error("Periodic template sync failed", zap.Error(err))
+			} else {
+				s.logger.Info("Periodic template sync completed successfully")
+			}
+			cancel()
+		}
+	}
 }
