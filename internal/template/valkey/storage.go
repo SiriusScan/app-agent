@@ -211,7 +211,6 @@ func (s *ValKeyTemplateStorage) GetTemplateManifest(ctx context.Context) (*Templ
 			Updated:    time.Now(),
 			Statistics: TemplateStatistics{},
 			Templates:  make(map[string]*TemplateInfo),
-			CustomTemplates: make(map[string]*TemplateInfo),
 		}, nil
 	}
 	
@@ -224,7 +223,6 @@ func (s *ValKeyTemplateStorage) GetTemplateManifest(ctx context.Context) (*Templ
 				Updated:    time.Now(),
 				Statistics: TemplateStatistics{},
 				Templates:  make(map[string]*TemplateInfo),
-				CustomTemplates: make(map[string]*TemplateInfo),
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get template manifest: %w", err)
