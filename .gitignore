@@ -56,4 +56,11 @@ node_modules/
 *.sw?
 # Task files
 tasks.json
-tasks/ 
+tasks/
+
+# Template cache (should never be committed)
+sirius-agent-modules/
+/var/lib/sirius/
+template-cache/
+.manifest.json
+.checksums.json 
