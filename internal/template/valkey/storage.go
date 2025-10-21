@@ -76,6 +76,12 @@ type TemplateInfo struct {
 
 // StoreTemplate stores a template in ValKey
 func (s *ValKeyTemplateStorage) StoreTemplate(ctx context.Context, template *types.Template, content []byte, isCustom bool) error {
+	// Skip if client is nil (graceful degradation)
+	if s.client == nil {
+		s.logger.Warn("Cannot store template - ValKey client is nil")
+		return nil
+	}
+	
 	// Calculate checksum
 	checksum := s.calculateChecksum(content)
 
@@ -198,6 +204,17 @@ func (s *ValKeyTemplateStorage) GetTemplate(ctx context.Context, templateID stri
 
 // GetTemplateManifest retrieves the global template manifest
 func (s *ValKeyTemplateStorage) GetTemplateManifest(ctx context.Context) (*TemplateManifest, error) {
+	// Return empty manifest if client is nil
+	if s.client == nil {
+		return &TemplateManifest{
+			Version:    "1.0.0",
+			Updated:    time.Now(),
+			Statistics: TemplateStatistics{},
+			Templates:  make(map[string]*TemplateInfo),
+			CustomTemplates: make(map[string]*TemplateInfo),
+		}, nil
+	}
+	
 	cmd := s.client.B().Get().Key(TemplateManifestKey).Build()
 	resp := s.client.Do(ctx, cmd)
 	if err := resp.Error(); err != nil {
@@ -207,6 +224,7 @@ func (s *ValKeyTemplateStorage) GetTemplateManifest(ctx context.Context) (*Templ
 				Updated:    time.Now(),
 				Statistics: TemplateStatistics{},
 				Templates:  make(map[string]*TemplateInfo),
+				CustomTemplates: make(map[string]*TemplateInfo),
 			}, nil
 		}
 		return nil, fmt.Errorf("failed to get template manifest: %w", err)
@@ -227,6 +245,12 @@ func (s *ValKeyTemplateStorage) GetTemplateManifest(ctx context.Context) (*Templ
 
 // UpdateTemplateManifest updates the global template manifest
 func (s *ValKeyTemplateStorage) UpdateTemplateManifest(ctx context.Context, manifest *TemplateManifest) error {
+	// Skip if client is nil (graceful degradation)
+	if s.client == nil {
+		s.logger.Warn("Cannot update manifest - ValKey client is nil")
+		return nil
+	}
+	
 	manifest.Updated = time.Now()
 	manifestData, err := json.Marshal(manifest)
 	if err != nil {
