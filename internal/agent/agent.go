@@ -19,9 +19,11 @@ import (
 	_ "github.com/SiriusScan/app-agent/internal/commands/help"         // Import for side-effect (registration)
 	_ "github.com/SiriusScan/app-agent/internal/commands/scan"         // Import for side-effect (registration)
 	_ "github.com/SiriusScan/app-agent/internal/commands/status"       // Import for side-effect (registration)
+	_ "github.com/SiriusScan/app-agent/internal/commands/template"     // Import for side-effect (registration)
 	_ "github.com/SiriusScan/app-agent/internal/commands/templatescan" // Import for side-effect (registration)
 	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/shell"
+	templateagent "github.com/SiriusScan/app-agent/internal/template/agent"
 	pb "github.com/SiriusScan/app-agent/proto/hello"
 )
 
@@ -38,6 +40,9 @@ type Agent struct {
 	// PowerShell related fields
 	powerShellPath   string // Detected or configured path to PowerShell/pwsh
 	scriptingEnabled bool   // Whether scripting is available and enabled
+
+	// Template sync manager
+	syncManager *templateagent.AgentSyncManager
 }
 
 // NewAgent creates a new HelloService client (agent)
@@ -202,6 +207,8 @@ func (a *Agent) WaitForCommands(ctx context.Context) error {
 			a.handleCommand(ctx, msg.GetCommand())
 		case pb.MessageType_ACKNOWLEDGMENT:
 			a.handleAcknowledgment(msg.GetAcknowledgment())
+		case pb.MessageType_TEMPLATE_UPDATE:
+			a.handleTemplateUpdate(ctx, msg.GetTemplateUpdate())
 		default:
 			a.logger.Warn("Received unknown message type", zap.Int32("type", int32(msg.Type)))
 		}
@@ -385,6 +392,42 @@ func (a *Agent) handleAcknowledgment(ack *pb.Acknowledgment) {
 		zap.String("status", ack.Status))
 }
 
+// handleTemplateUpdate processes template update messages from the server
+func (a *Agent) handleTemplateUpdate(ctx context.Context, update *pb.TemplateUpdate) {
+	if update == nil {
+		a.logger.Warn("Received nil template update")
+		return
+	}
+
+	if a.syncManager == nil {
+		a.logger.Warn("Sync manager not initialized, cannot process template update")
+		return
+	}
+
+	a.logger.Info("Processing template update from server",
+		zap.String("template_id", update.TemplateId),
+		zap.Bool("is_custom", update.IsCustom))
+
+	if err := a.syncManager.HandleTemplateUpdate(ctx, update); err != nil {
+		a.logger.Error("Failed to process template update",
+			zap.String("template_id", update.TemplateId),
+			zap.Error(err))
+	} else {
+		a.logger.Info("Template update processed successfully",
+			zap.String("template_id", update.TemplateId))
+	}
+}
+
+// SetSyncManager sets the template sync manager for this agent
+func (a *Agent) SetSyncManager(syncManager *templateagent.AgentSyncManager) {
+	a.syncManager = syncManager
+	a.logger.Info("Template sync manager set for agent")
+}
+
+// GetStream returns the gRPC stream for this agent
+func (a *Agent) GetStream() pb.HelloService_ConnectStreamClient {
+	return a.stream
+}
 
 // Helper function (add if not already present or import strings)
 func min(a, b int) int {

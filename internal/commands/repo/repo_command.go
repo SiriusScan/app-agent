@@ -30,7 +30,7 @@ func (c *RepoCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 	// Initialize repository integration if not already done
 	if c.repoIntegration == nil {
 		c.repoIntegration = repository.NewRepositoryIntegration(agentInfo.Logger)
-		if err := c.repoIntegration.Initialize(ctx); err != nil {
+		if err := c.repoIntegration.Initialize(ctx, agentInfo.Config.AgentID, agentInfo.Config.ServerAddress); err != nil {
 			return "", fmt.Errorf("failed to initialize repository: %w", err)
 		}
 	}

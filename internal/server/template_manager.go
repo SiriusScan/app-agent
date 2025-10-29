@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/SiriusScan/app-agent/internal/template/types"
 	templatevalkey "github.com/SiriusScan/app-agent/internal/template/valkey"
+	pb "github.com/SiriusScan/app-agent/proto/hello"
 )
 
 // ServerTemplateManager manages templates on the server side
@@ -26,10 +28,12 @@ type ServerTemplateManager struct {
 
 // TemplateConfig contains configuration for template management
 type TemplateConfig struct {
-	RepoURL     string        `json:"repo_url"`
-	RepoPath    string        `json:"repo_path"`
-	SyncInterval time.Duration `json:"sync_interval"`
-	MaxTemplateSize int64     `json:"max_template_size"`
+	RepoURL         string        `json:"repo_url"`
+	RepoPath        string        `json:"repo_path"`
+	RepoBranch      string        `json:"repo_branch"`
+	RepoID          string        `json:"repo_id"`
+	SyncInterval    time.Duration `json:"sync_interval"`
+	MaxTemplateSize int64         `json:"max_template_size"`
 }
 
 // NewServerTemplateManager creates a new server template manager
@@ -37,8 +41,14 @@ func NewServerTemplateManager(valkeyClient valkey.Client, logger *zap.Logger, co
 	// Create ValKey storage
 	storage := templatevalkey.NewValKeyTemplateStorage(valkeyClient, logger)
 
+	// Set default branch if not specified
+	branch := config.RepoBranch
+	if branch == "" {
+		branch = "main"
+	}
+
 	// Create GitHub sync manager
-	githubSync := templatevalkey.NewGitHubSyncManager(storage, logger, config.RepoPath, config.RepoURL)
+	githubSync := templatevalkey.NewGitHubSyncManager(storage, logger, config.RepoPath, config.RepoURL, branch)
 
 	return &ServerTemplateManager{
 		valkeyClient: valkeyClient,
@@ -53,8 +63,14 @@ func NewServerTemplateManager(valkeyClient valkey.Client, logger *zap.Logger, co
 // SyncFromGitHub pulls standard templates from sirius-agent-modules
 func (tm *ServerTemplateManager) SyncFromGitHub(ctx context.Context) error {
 	tm.logger.Info("Starting GitHub template sync")
-	
-	if err := tm.githubSync.SyncFromGitHub(ctx); err != nil {
+
+	// Use configured repo ID or default
+	repoID := tm.config.RepoID
+	if repoID == "" {
+		repoID = "sirius-agent-modules"
+	}
+
+	if err := tm.githubSync.SyncFromGitHub(ctx, repoID); err != nil {
 		tm.logger.Error("GitHub sync failed", zap.Error(err))
 		return fmt.Errorf("GitHub sync failed: %w", err)
 	}
@@ -103,6 +119,213 @@ func (tm *ServerTemplateManager) StoreCustomTemplate(ctx context.Context, templa
 // GetTemplateManifest returns the manifest for agent sync
 func (tm *ServerTemplateManager) GetTemplateManifest(ctx context.Context) (*templatevalkey.TemplateManifest, error) {
 	return tm.storage.GetTemplateManifest(ctx)
+}
+
+// GetTemplatesForSync retrieves manifest and templates for agent synchronization
+func (tm *ServerTemplateManager) GetTemplatesForSync(ctx context.Context, lastSync int64) (*pb.TemplateManifest, []*pb.TemplateUpdate, error) {
+	tm.logger.Info("Getting templates for sync", zap.Int64("last_sync", lastSync))
+
+	if tm.valkeyClient == nil {
+		tm.logger.Warn("ValKey client not initialized, returning empty sync")
+		return &pb.TemplateManifest{
+			Version:   "1.0.0",
+			Updated:   time.Now().Unix(),
+			Templates: make(map[string]*pb.TemplateMetadata),
+			Statistics: &pb.TemplateStatistics{
+				TotalTemplates:    0,
+				StandardTemplates: 0,
+				CustomTemplates:   0,
+			},
+		}, []*pb.TemplateUpdate{}, nil
+	}
+
+	// Get template manifest from ValKey
+	manifestKey := "template:manifest"
+	cmd := tm.valkeyClient.B().Get().Key(manifestKey).Build()
+	resp := tm.valkeyClient.Do(ctx, cmd)
+
+	if err := resp.Error(); err != nil {
+		tm.logger.Warn("Failed to get template manifest from ValKey", zap.Error(err))
+		return &pb.TemplateManifest{
+			Version:   "1.0.0",
+			Updated:   time.Now().Unix(),
+			Templates: make(map[string]*pb.TemplateMetadata),
+			Statistics: &pb.TemplateStatistics{
+				TotalTemplates:    0,
+				StandardTemplates: 0,
+				CustomTemplates:   0,
+			},
+		}, []*pb.TemplateUpdate{}, nil
+	}
+
+	// Get list of all template metadata keys
+	keysCmd := tm.valkeyClient.B().Keys().Pattern("template:meta:*").Build()
+	keysResp := tm.valkeyClient.Do(ctx, keysCmd)
+
+	if err := keysResp.Error(); err != nil {
+		tm.logger.Warn("Failed to list template keys", zap.Error(err))
+		return nil, nil, fmt.Errorf("failed to list template keys: %w", err)
+	}
+
+	metaKeys, err := keysResp.AsStrSlice()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to get template keys: %w", err)
+	}
+
+	tm.logger.Info("Found template metadata keys", zap.Int("count", len(metaKeys)))
+
+	// Build proto manifest
+	protoManifest := &pb.TemplateManifest{
+		Version:   "2.0.0",
+		Updated:   time.Now().Unix(),
+		Templates: make(map[string]*pb.TemplateMetadata),
+		Statistics: &pb.TemplateStatistics{
+			TotalTemplates:    int32(len(metaKeys)),
+			StandardTemplates: 0,
+			CustomTemplates:   0,
+		},
+	}
+
+	// Fetch metadata and content for each template
+	var templates []*pb.TemplateUpdate
+
+	for _, metaKey := range metaKeys {
+		// Extract template ID from key (template:meta:TEMPLATE-ID)
+		templateID := metaKey[14:] // Skip "template:meta:" prefix
+
+		// Get template metadata
+		metaCmd := tm.valkeyClient.B().Get().Key(metaKey).Build()
+		metaResp := tm.valkeyClient.Do(ctx, metaCmd)
+
+		if err := metaResp.Error(); err != nil {
+			tm.logger.Warn("Failed to get template metadata",
+				zap.String("id", templateID),
+				zap.Error(err))
+			continue
+		}
+
+		metaJSON, err := metaResp.ToString()
+		if err != nil {
+			tm.logger.Warn("Failed to convert metadata to string",
+				zap.String("id", templateID),
+				zap.Error(err))
+			continue
+		}
+
+		// Parse metadata
+		var meta struct {
+			ID            string   `json:"id"`
+			Version       string   `json:"version"`
+			Checksum      string   `json:"checksum"`
+			Size          int64    `json:"size"`
+			Severity      string   `json:"severity"`
+			Platforms     []string `json:"platforms"`
+			DetectionType string   `json:"detection_type"`
+			Author        string   `json:"author"`
+			Created       string   `json:"created"`
+			Updated       string   `json:"updated"`
+			IsCustom      bool     `json:"is_custom"`
+		}
+
+		if err := json.Unmarshal([]byte(metaJSON), &meta); err != nil {
+			tm.logger.Warn("Failed to parse template metadata",
+				zap.String("id", templateID),
+				zap.Error(err))
+			continue
+		}
+
+		// Parse timestamps
+		created, _ := time.Parse(time.RFC3339, meta.Created)
+		updated, _ := time.Parse(time.RFC3339, meta.Updated)
+
+		// Add to proto manifest
+		protoMetadata := &pb.TemplateMetadata{
+			Id:            meta.ID,
+			Version:       meta.Version,
+			Checksum:      meta.Checksum,
+			Size:          meta.Size,
+			Severity:      meta.Severity,
+			Platforms:     meta.Platforms,
+			DetectionType: meta.DetectionType,
+			Author:        meta.Author,
+			Created:       created.Unix(),
+			Updated:       updated.Unix(),
+			IsCustom:      meta.IsCustom,
+		}
+
+		protoManifest.Templates[templateID] = protoMetadata
+
+		// Update statistics
+		if meta.IsCustom {
+			protoManifest.Statistics.CustomTemplates++
+		} else {
+			protoManifest.Statistics.StandardTemplates++
+		}
+
+		// Get template content
+		var templateKey string
+		if meta.IsCustom {
+			templateKey = fmt.Sprintf("template:custom:%s", templateID)
+		} else {
+			templateKey = fmt.Sprintf("template:standard:%s", templateID)
+		}
+
+		contentCmd := tm.valkeyClient.B().Get().Key(templateKey).Build()
+		contentResp := tm.valkeyClient.Do(ctx, contentCmd)
+
+		if err := contentResp.Error(); err != nil {
+			tm.logger.Warn("Failed to get template content",
+				zap.String("id", templateID),
+				zap.Error(err))
+			continue
+		}
+
+		contentStr, err := contentResp.ToString()
+		if err != nil {
+			tm.logger.Warn("Failed to convert template content to string",
+				zap.String("id", templateID),
+				zap.Error(err))
+			continue
+		}
+
+		// Parse the stored TemplateInfo to extract actual content
+		var storedInfo struct {
+			Content []byte `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(contentStr), &storedInfo); err != nil {
+			tm.logger.Warn("Failed to parse stored template info",
+				zap.String("id", templateID),
+				zap.Error(err))
+			continue
+		}
+
+		// The content field contains the actual YAML template
+		content := string(storedInfo.Content)
+
+		// Recalculate checksum from actual content being sent
+		// This ensures the checksum matches what the agent will receive
+		hash := sha256.Sum256([]byte(content))
+		actualChecksum := fmt.Sprintf("sha256:%x", hash)
+
+		// Create template update message
+		templateUpdate := &pb.TemplateUpdate{
+			TemplateId: templateID,
+			Version:    meta.Version,
+			Checksum:   actualChecksum, // Use recalculated checksum
+			Content:    content,
+			IsCustom:   meta.IsCustom,
+			Timestamp:  time.Now().Unix(),
+		}
+
+		templates = append(templates, templateUpdate)
+	}
+
+	tm.logger.Info("Prepared templates for sync",
+		zap.Int("total_templates", len(templates)),
+		zap.Int32("standard", protoManifest.Statistics.StandardTemplates),
+		zap.Int32("custom", protoManifest.Statistics.CustomTemplates))
+
+	return protoManifest, templates, nil
 }
 
 // GetTemplate retrieves a template by ID
@@ -154,7 +377,13 @@ func (tm *ServerTemplateManager) StartPeriodicSync(ctx context.Context) {
 	tm.logger.Info("Starting periodic template sync",
 		zap.Duration("interval", tm.config.SyncInterval))
 
-	go tm.githubSync.StartPeriodicSync(ctx, tm.config.SyncInterval)
+	// Use configured repo ID or default
+	repoID := tm.config.RepoID
+	if repoID == "" {
+		repoID = "sirius-agent-modules"
+	}
+
+	go tm.githubSync.StartPeriodicSync(ctx, tm.config.SyncInterval, repoID)
 }
 
 // GetSyncStatus returns the current sync status
@@ -218,7 +447,7 @@ func (tm *ServerTemplateManager) pushToAgents(ctx context.Context, template *typ
 	// For the demo, we'll use the existing command system to trigger template sync
 	// This is simpler than modifying proto files and still demonstrates the functionality
 	command := "internal:template sync"
-	
+
 	// Send sync command to all connected agents
 	tm.server.agentsMutex.RLock()
 	agentCount := len(tm.server.agents)
@@ -298,9 +527,9 @@ func (tm *ServerTemplateManager) GetTemplateStatistics(ctx context.Context) (map
 	}
 
 	return map[string]interface{}{
-		"total_templates":     manifest.Statistics.TotalTemplates,
-		"standard_templates":  manifest.Statistics.StandardTemplates,
-		"custom_templates":    manifest.Statistics.CustomTemplates,
+		"total_templates":    manifest.Statistics.TotalTemplates,
+		"standard_templates": manifest.Statistics.StandardTemplates,
+		"custom_templates":   manifest.Statistics.CustomTemplates,
 		"by_type":            manifest.Statistics.ByType,
 		"by_platform":        manifest.Statistics.ByPlatform,
 		"by_severity":        manifest.Statistics.BySeverity,

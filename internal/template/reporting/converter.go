@@ -19,11 +19,13 @@ func ConvertTemplateResultsToVulnerabilities(results []*types.Result) []sirius.V
 		}
 
 		vuln := sirius.Vulnerability{
-			VID:         result.TemplateID,                     // Use template ID as vulnerability ID
-			Title:       result.TemplateName,                   // Template name as title
-			Description: result.TemplateName,                   // Use name as description (fallback)
-			RiskScore:   severityToRiskScore(result.Severity),  // Map severity to risk score
-			Severity:    string(result.Severity),               // Include severity string
+			VID:         result.TemplateID,       // Use template ID as vulnerability ID
+			Title:       result.TemplateName,     // Template name as title
+			Description: result.TemplateName,     // Use name as description (fallback)
+			RiskScore:   result.RiskScore,        // Use calculated risk score from result
+			Severity:    string(result.Severity), // Include severity string
+			CVSSScore:   result.RiskScore,        // Also populate CVSSScore field
+			CVSSVector:  result.CVSSVector,       // Include CVSS vector if available
 		}
 
 		vulnerabilities = append(vulnerabilities, vuln)
@@ -35,17 +37,17 @@ func ConvertTemplateResultsToVulnerabilities(results []*types.Result) []sirius.V
 // BuildHostData constructs a sirius.Host from fingerprint and vulnerabilities.
 func BuildHostData(fp *fingerprint.HostFingerprint, vulns []sirius.Vulnerability) sirius.Host {
 	return sirius.Host{
-		HID:             fp.AgentID,   // Use agent ID as host ID
-		OS:              fp.OS,         // Operating system
-		OSVersion:       fp.OSVersion,  // OS version
-		IP:              fp.PrimaryIP,  // Primary IP address
-		Hostname:        fp.Hostname,   // System hostname
-		Vulnerabilities: vulns,         // Detected vulnerabilities
-		Ports:           []sirius.Port{}, // No port data from template scans
+		HID:             fp.AgentID,         // Use agent ID as host ID
+		OS:              fp.OS,              // Operating system
+		OSVersion:       fp.OSVersion,       // OS version
+		IP:              fp.PrimaryIP,       // Primary IP address
+		Hostname:        fp.Hostname,        // System hostname
+		Vulnerabilities: vulns,              // Detected vulnerabilities
+		Ports:           []sirius.Port{},    // No port data from template scans
 		Services:        []sirius.Service{}, // No service data from template scans
-		CPE:             []string{},    // No CPE data from template scans
-		Users:           []string{},    // No user data from template scans
-		Notes:           []string{},    // No notes
+		CPE:             []string{},         // No CPE data from template scans
+		Users:           []string{},         // No user data from template scans
+		Notes:           []string{},         // No notes
 	}
 }
 
@@ -64,45 +66,35 @@ func BuildAgentMetadata(results []*types.Result, executionTime time.Duration) ma
 			matchedCount++
 		}
 
-		templateResults = append(templateResults, map[string]interface{}{
+		tr := map[string]interface{}{
 			"template_id":      result.TemplateID,
 			"vulnerability_id": result.TemplateID, // Same as VID in vulnerabilities
 			"vulnerable":       result.Matched,
 			"confidence":       result.Confidence,
 			"severity":         string(result.Severity),
-		})
+			"risk_score":       result.RiskScore, // Include calculated risk score
+		}
+
+		// Include CVSS vector if available
+		if result.CVSSVector != "" {
+			tr["cvss_vector"] = result.CVSSVector
+		}
+
+		templateResults = append(templateResults, tr)
 	}
 
 	return map[string]interface{}{
-		"agent_version":   "1.0.0-template-mvp",
-		"scan_duration":   int64(executionTime.Milliseconds()),
+		"agent_version":    "1.0.0-template-mvp",
+		"scan_duration":    int64(executionTime.Milliseconds()),
 		"template_results": templateResults,
-		"template_count":  len(results),
-		"matched_count":   matchedCount,
+		"template_count":   len(results),
+		"matched_count":    matchedCount,
 	}
 }
 
-// severityToRiskScore converts template severity to a numeric risk score (0.0-10.0).
-// This mapping aligns with CVSS-style scoring where:
-//   - Critical: 9.0-10.0
-//   - High:     7.0-8.9
-//   - Medium:   4.0-6.9
-//   - Low:      0.1-3.9
-//   - Info:     0.0
-func severityToRiskScore(severity types.Severity) float64 {
-	switch severity {
-	case types.SeverityCritical:
-		return 9.5 // Critical range: 9.0-10.0
-	case types.SeverityHigh:
-		return 7.5 // High range: 7.0-8.9
-	case types.SeverityMedium:
-		return 5.0 // Medium range: 4.0-6.9
-	case types.SeverityLow:
-		return 2.0 // Low range: 0.1-3.9
-	case types.SeverityInfo:
-		return 0.0 // Info: 0.0
-	default:
-		return 0.0 // Unknown severity treated as info
-	}
-}
-
+// Note: severityToRiskScore function removed - risk scoring now handled by
+// internal/template/risk package with priority system:
+// 1. Custom risk_score
+// 2. CVSS vector calculation
+// 3. CVSS score
+// 4. Severity mapping (fallback)

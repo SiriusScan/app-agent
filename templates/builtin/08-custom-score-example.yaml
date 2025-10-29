@@ -1,0 +1,35 @@
+id: EXAMPLE-CUSTOM-001
+info:
+  name: Critical Configuration Vulnerability (Custom Score Example)
+  author: Sirius Security
+  severity: critical
+  risk_score: 9.8 # Custom numerical score - highest priority
+  description: Demonstrates custom numerical risk score assignment
+  references:
+    - https://example.com/custom-scoring
+  tags:
+    - example
+    - custom-score
+    - configuration
+  version: "1.0"
+
+detection:
+  logic: all
+  steps:
+    - type: file_content
+      platforms:
+        - linux
+        - darwin
+      weight: 1.0
+      config:
+        path: /etc/example.conf
+        regex: "vulnerable_setting=true"
+
+
+
+
+
+
+
+
+

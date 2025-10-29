@@ -10,127 +10,232 @@ import (
 	"path/filepath"
 	"time"
 
-	valkey "github.com/valkey-io/valkey-go"
 	"go.uber.org/zap"
 
 	"github.com/SiriusScan/app-agent/internal/template/parser"
 	"github.com/SiriusScan/app-agent/internal/template/types"
+	pb "github.com/SiriusScan/app-agent/proto/hello"
 )
 
 // AgentSyncManager manages template synchronization for agents
 type AgentSyncManager struct {
-	cacheDir     string
-	valkeyClient valkey.Client
-	logger       *zap.Logger
-	serverURL    string
+	cacheDir  string
+	logger    *zap.Logger
+	serverURL string
+	agentID   string
+
+	// gRPC stream for communication with server
+	grpcStream pb.HelloService_ConnectStreamClient
 }
 
 // CacheManifest represents the local cache manifest
 type CacheManifest struct {
-	Version      string                 `json:"version"`
-	LastSync     time.Time              `json:"last_sync"`
-	ServerURL    string                 `json:"server_url"`
-	Templates    map[string]*CacheTemplateInfo `json:"templates"`
-	Statistics   CacheStatistics        `json:"statistics"`
+	Version    string                        `json:"version"`
+	LastSync   time.Time                     `json:"last_sync"`
+	ServerURL  string                        `json:"server_url"`
+	Templates  map[string]*CacheTemplateInfo `json:"templates"`
+	Statistics CacheStatistics               `json:"statistics"`
 }
 
 // CacheTemplateInfo represents template information in the cache
 type CacheTemplateInfo struct {
-	ID           string    `json:"id"`
-	Version      string    `json:"version"`
-	Checksum     string    `json:"checksum"`
-	Size         int64     `json:"size"`
-	Severity     string    `json:"severity"`
-	Platforms    []string  `json:"platforms"`
-	DetectionType string   `json:"detection_type"`
-	Author       string    `json:"author"`
-	Created      time.Time `json:"created"`
-	Updated      time.Time `json:"updated"`
-	FilePath     string    `json:"file_path"`
-	IsCustom     bool      `json:"is_custom"`
+	ID            string    `json:"id"`
+	Version       string    `json:"version"`
+	Checksum      string    `json:"checksum"`
+	Size          int64     `json:"size"`
+	Severity      string    `json:"severity"`
+	Platforms     []string  `json:"platforms"`
+	DetectionType string    `json:"detection_type"`
+	Author        string    `json:"author"`
+	Created       time.Time `json:"created"`
+	Updated       time.Time `json:"updated"`
+	FilePath      string    `json:"file_path"`
+	IsCustom      bool      `json:"is_custom"`
 }
 
 // CacheStatistics contains cache statistics
 type CacheStatistics struct {
-	TotalTemplates     int `json:"total_templates"`
-	StandardTemplates  int `json:"standard_templates"`
-	CustomTemplates    int `json:"custom_templates"`
-	LastSyncDuration   time.Duration `json:"last_sync_duration"`
-	CacheSize          int64 `json:"cache_size"`
+	TotalTemplates    int           `json:"total_templates"`
+	StandardTemplates int           `json:"standard_templates"`
+	CustomTemplates   int           `json:"custom_templates"`
+	LastSyncDuration  time.Duration `json:"last_sync_duration"`
+	CacheSize         int64         `json:"cache_size"`
 }
 
 // NewAgentSyncManager creates a new agent sync manager
-func NewAgentSyncManager(valkeyClient valkey.Client, logger *zap.Logger, serverURL string) (*AgentSyncManager, error) {
+func NewAgentSyncManager(logger *zap.Logger, serverURL string, agentID string) (*AgentSyncManager, error) {
 	cacheDir := GetAgentTemplateCacheDir()
-	
+
 	// Ensure cache directory structure exists
 	if err := EnsureCacheDirectoryStructure(); err != nil {
 		return nil, fmt.Errorf("failed to create cache directory structure: %w", err)
 	}
-	
+
 	return &AgentSyncManager{
-		cacheDir:     cacheDir,
-		valkeyClient: valkeyClient,
-		logger:       logger,
-		serverURL:    serverURL,
+		cacheDir:  cacheDir,
+		logger:    logger,
+		serverURL: serverURL,
+		agentID:   agentID,
 	}, nil
 }
 
-// SyncFromServer pulls templates from server and updates local cache
+// SetGRPCStream sets the gRPC stream reference for communication with server
+func (asm *AgentSyncManager) SetGRPCStream(stream pb.HelloService_ConnectStreamClient) {
+	asm.grpcStream = stream
+	asm.logger.Info("gRPC stream reference set for template sync manager")
+}
+
+// SyncFromServer sends a template sync request to the server via gRPC stream
 func (asm *AgentSyncManager) SyncFromServer(ctx context.Context) error {
-	startTime := time.Now()
-	asm.logger.Info("Starting template sync from server",
+	asm.logger.Info("Starting template sync from server via gRPC",
 		zap.String("server_url", asm.serverURL))
 
-	// Get server manifest
-	serverManifest, err := asm.getServerManifest(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get server manifest: %w", err)
+	if asm.grpcStream == nil {
+		return fmt.Errorf("gRPC stream not set; cannot sync templates")
 	}
 
-	// Load local cache manifest
+	// Load local manifest to get last sync time
 	localManifest, err := asm.loadCacheManifest()
 	if err != nil {
-		asm.logger.Warn("Failed to load local cache manifest, creating new one", zap.Error(err))
+		asm.logger.Warn("Failed to load local cache manifest, using zero timestamp", zap.Error(err))
 		localManifest = &CacheManifest{
-			Version:   "1.0.0",
-			Templates: make(map[string]*CacheTemplateInfo),
+			Version:    "1.0.0",
+			Templates:  make(map[string]*CacheTemplateInfo),
 			Statistics: CacheStatistics{},
 		}
 	}
 
-	// Compare manifests and download changed templates
-	var downloadedCount int
-	var errorCount int
+	// Create sync request
+	syncRequest := &pb.TemplateSyncRequest{
+		AgentId:  asm.agentID,
+		LastSync: localManifest.LastSync.Unix(),
+	}
 
-	for templateID, serverTemplate := range serverManifest.Templates {
-		localTemplate, exists := localManifest.Templates[templateID]
-		
-		// Check if template needs update
-		needsUpdate := !exists || 
-			localTemplate.Checksum != serverTemplate.Checksum ||
-			localTemplate.Version != serverTemplate.Version
+	// Send sync request via gRPC stream
+	msg := &pb.AgentMessage{
+		AgentId: asm.agentID,
+		Type:    pb.MessageType_TEMPLATE_SYNC_REQUEST,
+		Payload: &pb.AgentMessage_SyncRequest{
+			SyncRequest: syncRequest,
+		},
+	}
 
-		if needsUpdate {
-			if err := asm.downloadTemplate(ctx, templateID, serverTemplate); err != nil {
-				asm.logger.Error("Failed to download template",
-					zap.String("id", templateID),
-					zap.Error(err))
-				errorCount++
-				continue
-			}
-			downloadedCount++
+	if err := asm.grpcStream.Send(msg); err != nil {
+		return fmt.Errorf("failed to send template sync request: %w", err)
+	}
+
+	asm.logger.Info("Template sync request sent to server, waiting for response",
+		zap.Int64("last_sync", syncRequest.LastSync))
+
+	// Note: Template updates will be received asynchronously via HandleTemplateUpdate
+	// called from the agent's message processing loop
+
+	return nil
+}
+
+// HandleManifestUpdate processes manifest received from server
+func (asm *AgentSyncManager) HandleManifestUpdate(ctx context.Context, manifest *pb.TemplateManifest) error {
+	asm.logger.Info("Received template manifest from server",
+		zap.String("version", manifest.Version),
+		zap.Int("templates", len(manifest.Templates)))
+
+	// Update local manifest with server manifest data
+	localManifest, err := asm.loadCacheManifest()
+	if err != nil {
+		localManifest = &CacheManifest{
+			Version:    manifest.Version,
+			Templates:  make(map[string]*CacheTemplateInfo),
+			Statistics: CacheStatistics{},
 		}
 	}
 
-	// Update local manifest
-	localManifest.Version = serverManifest.Version
-	localManifest.LastSync = time.Now()
+	// Update version and server info
+	localManifest.Version = manifest.Version
 	localManifest.ServerURL = asm.serverURL
-	localManifest.Statistics.LastSyncDuration = time.Since(startTime)
-	localManifest.Statistics.TotalTemplates = len(serverManifest.Templates)
+	localManifest.Statistics.TotalTemplates = int(manifest.Statistics.TotalTemplates)
+	localManifest.Statistics.StandardTemplates = int(manifest.Statistics.StandardTemplates)
+	localManifest.Statistics.CustomTemplates = int(manifest.Statistics.CustomTemplates)
 
-	// Count by type
+	// Save updated manifest
+	if err := asm.saveCacheManifest(localManifest); err != nil {
+		asm.logger.Error("Failed to save cache manifest", zap.Error(err))
+		return fmt.Errorf("failed to save cache manifest: %w", err)
+	}
+
+	asm.logger.Info("Template manifest processed and saved",
+		zap.Int("total_templates", localManifest.Statistics.TotalTemplates))
+
+	return nil
+}
+
+// HandleTemplateUpdate processes a template update received from the server
+func (asm *AgentSyncManager) HandleTemplateUpdate(ctx context.Context, update *pb.TemplateUpdate) error {
+	// Check if this is a manifest-only message
+	if update.Manifest != nil && update.TemplateId == "" {
+		asm.logger.Info("Received manifest-only update, processing manifest")
+		return asm.HandleManifestUpdate(ctx, update.Manifest)
+	}
+
+	templateID := update.TemplateId
+	asm.logger.Info("Received template update from server",
+		zap.String("id", templateID),
+		zap.String("version", update.Version),
+		zap.Bool("is_custom", update.IsCustom))
+
+	// Determine cache path
+	var cachePath string
+	if update.IsCustom {
+		cachePath = filepath.Join(GetCustomTemplatesPath(), templateID+".yaml")
+	} else {
+		cachePath = filepath.Join(GetStandardTemplatesPath(), templateID+".yaml")
+	}
+
+	// Write template file atomically
+	tempPath := cachePath + ".tmp"
+	if err := os.WriteFile(tempPath, []byte(update.Content), 0644); err != nil {
+		return fmt.Errorf("failed to write template file: %w", err)
+	}
+
+	if err := os.Rename(tempPath, cachePath); err != nil {
+		os.Remove(tempPath) // Clean up temp file
+		return fmt.Errorf("failed to rename template file: %w", err)
+	}
+
+	// Verify checksum
+	hash := sha256.Sum256([]byte(update.Content))
+	actualChecksum := "sha256:" + hex.EncodeToString(hash[:])
+
+	if actualChecksum != update.Checksum {
+		asm.logger.Warn("Template checksum mismatch",
+			zap.String("id", templateID),
+			zap.String("expected", update.Checksum),
+			zap.String("actual", actualChecksum))
+	}
+
+	// Update local manifest
+	localManifest, err := asm.loadCacheManifest()
+	if err != nil {
+		asm.logger.Warn("Failed to load cache manifest, creating new one", zap.Error(err))
+		localManifest = &CacheManifest{
+			Version:    "1.0.0",
+			Templates:  make(map[string]*CacheTemplateInfo),
+			Statistics: CacheStatistics{},
+		}
+	}
+
+	// Add/update template info in manifest
+	localManifest.Templates[templateID] = &CacheTemplateInfo{
+		ID:       templateID,
+		Version:  update.Version,
+		Checksum: update.Checksum,
+		Size:     int64(len(update.Content)),
+		FilePath: cachePath,
+		IsCustom: update.IsCustom,
+		Updated:  time.Now(),
+	}
+
+	// Update statistics
+	localManifest.Statistics.TotalTemplates = len(localManifest.Templates)
 	localManifest.Statistics.StandardTemplates = 0
 	localManifest.Statistics.CustomTemplates = 0
 	for _, template := range localManifest.Templates {
@@ -141,23 +246,19 @@ func (asm *AgentSyncManager) SyncFromServer(ctx context.Context) error {
 		}
 	}
 
-	// Calculate cache size
-	cacheSize, err := asm.calculateCacheSize()
-	if err != nil {
-		asm.logger.Warn("Failed to calculate cache size", zap.Error(err))
-	} else {
-		localManifest.Statistics.CacheSize = cacheSize
-	}
+	// Update last sync time
+	localManifest.LastSync = time.Now()
 
 	// Save updated manifest
 	if err := asm.saveCacheManifest(localManifest); err != nil {
+		asm.logger.Error("Failed to save cache manifest", zap.Error(err))
 		return fmt.Errorf("failed to save cache manifest: %w", err)
 	}
 
-	asm.logger.Info("Template sync completed",
-		zap.Int("downloaded", downloadedCount),
-		zap.Int("errors", errorCount),
-		zap.Duration("duration", time.Since(startTime)))
+	asm.logger.Info("Template update processed successfully",
+		zap.String("id", templateID),
+		zap.String("path", cachePath),
+		zap.Int64("size", int64(len(update.Content))))
 
 	return nil
 }
@@ -270,66 +371,16 @@ func (asm *AgentSyncManager) GetCacheStatus() (*CacheManifest, error) {
 	return asm.loadCacheManifest()
 }
 
-// getServerManifest retrieves the template manifest from the server
-func (asm *AgentSyncManager) getServerManifest(ctx context.Context) (*ServerManifest, error) {
-	// This would typically make an HTTP request to the server
-	// For now, we'll simulate getting it from ValKey directly
-	// In a real implementation, this would be an HTTP API call
-	
-	// TODO: Implement HTTP client to get manifest from server
-	// For now, return empty manifest
-	return &ServerManifest{
-		Version:   "1.0.0",
-		Updated:   time.Now(),
-		Templates: make(map[string]*ServerTemplateInfo),
-	}, nil
-}
-
-// downloadTemplate downloads a template from the server
-func (asm *AgentSyncManager) downloadTemplate(ctx context.Context, templateID string, templateInfo *ServerTemplateInfo) error {
-	asm.logger.Debug("Downloading template",
-		zap.String("id", templateID),
-		zap.String("checksum", templateInfo.Checksum))
-
-	// Determine cache path
-	var cachePath string
-	if templateInfo.IsCustom {
-		cachePath = filepath.Join(GetCustomTemplatesPath(), templateID+".yaml")
-	} else {
-		cachePath = filepath.Join(GetStandardTemplatesPath(), templateID+".yaml")
-	}
-
-	// TODO: Implement actual template download from server
-	// For now, create a placeholder file
-	content := []byte(fmt.Sprintf("# Template %s\n# Placeholder content", templateID))
-	
-	// Write template file atomically
-	tempPath := cachePath + ".tmp"
-	if err := os.WriteFile(tempPath, content, 0644); err != nil {
-		return fmt.Errorf("failed to write template file: %w", err)
-	}
-	
-	if err := os.Rename(tempPath, cachePath); err != nil {
-		return fmt.Errorf("failed to rename template file: %w", err)
-	}
-
-	asm.logger.Debug("Template downloaded successfully",
-		zap.String("id", templateID),
-		zap.String("path", cachePath))
-
-	return nil
-}
-
 // loadCacheManifest loads the local cache manifest
 func (asm *AgentSyncManager) loadCacheManifest() (*CacheManifest, error) {
 	manifestPath := GetCacheManifestPath()
-	
+
 	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &CacheManifest{
-				Version:   "1.0.0",
-				Templates: make(map[string]*CacheTemplateInfo),
+				Version:    "1.0.0",
+				Templates:  make(map[string]*CacheTemplateInfo),
 				Statistics: CacheStatistics{},
 			}, nil
 		}
@@ -347,7 +398,7 @@ func (asm *AgentSyncManager) loadCacheManifest() (*CacheManifest, error) {
 // saveCacheManifest saves the local cache manifest
 func (asm *AgentSyncManager) saveCacheManifest(manifest *CacheManifest) error {
 	manifestPath := GetCacheManifestPath()
-	
+
 	data, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("failed to marshal cache manifest: %w", err)
@@ -358,7 +409,7 @@ func (asm *AgentSyncManager) saveCacheManifest(manifest *CacheManifest) error {
 	if err := os.WriteFile(tempPath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write cache manifest: %w", err)
 	}
-	
+
 	if err := os.Rename(tempPath, manifestPath); err != nil {
 		return fmt.Errorf("failed to rename cache manifest: %w", err)
 	}
@@ -369,7 +420,7 @@ func (asm *AgentSyncManager) saveCacheManifest(manifest *CacheManifest) error {
 // calculateCacheSize calculates the total size of the cache directory
 func (asm *AgentSyncManager) calculateCacheSize() (int64, error) {
 	var totalSize int64
-	
+
 	err := filepath.Walk(asm.cacheDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -379,29 +430,6 @@ func (asm *AgentSyncManager) calculateCacheSize() (int64, error) {
 		}
 		return nil
 	})
-	
+
 	return totalSize, err
-}
-
-// ServerManifest represents the server template manifest
-type ServerManifest struct {
-	Version   string                        `json:"version"`
-	Updated   time.Time                     `json:"updated"`
-	Templates map[string]*ServerTemplateInfo `json:"templates"`
-}
-
-// ServerTemplateInfo represents template information from the server
-type ServerTemplateInfo struct {
-	ID               string    `json:"id"`
-	Version          string    `json:"version"`
-	Checksum         string    `json:"checksum"`
-	Size             int64     `json:"size"`
-	Severity         string    `json:"severity"`
-	Platforms        []string  `json:"platforms"`
-	DetectionType    string    `json:"detection_type"`
-	Author           string    `json:"author"`
-	Created          time.Time `json:"created"`
-	Updated          time.Time `json:"updated"`
-	VulnerabilityIDs []string  `json:"vulnerability_ids"`
-	IsCustom         bool      `json:"is_custom"`
 }

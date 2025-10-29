@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/SiriusScan/app-agent/internal/template/risk"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
 
@@ -34,6 +35,36 @@ func ValidateTemplate(t *types.Template) error {
 			t.Info.Severity,
 			joinSeverities(),
 		))
+	}
+
+	// Validate risk_score if provided
+	if t.Info.RiskScore != nil {
+		if !types.ValidateRiskScore(*t.Info.RiskScore) {
+			errors = append(errors, fmt.Sprintf(
+				"info.risk_score %f is invalid (must be between 0.0 and 10.0)",
+				*t.Info.RiskScore,
+			))
+		}
+	}
+
+	// Validate cvss_vector if provided
+	if t.Info.CVSSVector != "" {
+		if _, err := risk.ParseCVSSVector(t.Info.CVSSVector); err != nil {
+			errors = append(errors, fmt.Sprintf(
+				"info.cvss_vector is invalid: %v",
+				err,
+			))
+		}
+	}
+
+	// Validate cvss_score if provided
+	if t.Info.CVSSScore != nil {
+		if !types.ValidateRiskScore(*t.Info.CVSSScore) {
+			errors = append(errors, fmt.Sprintf(
+				"info.cvss_score %f is invalid (must be between 0.0 and 10.0)",
+				*t.Info.CVSSScore,
+			))
+		}
 	}
 
 	// Validate detection configuration
@@ -115,4 +146,3 @@ func joinPlatforms() string {
 	}
 	return strings.Join(strs, ", ")
 }
-

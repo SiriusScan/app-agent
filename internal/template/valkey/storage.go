@@ -40,21 +40,21 @@ const (
 
 // TemplateManifest represents the global template manifest
 type TemplateManifest struct {
-	Version     string                 `json:"version"`
-	Updated     time.Time              `json:"updated"`
-	Statistics  TemplateStatistics     `json:"statistics"`
-	Templates   map[string]*TemplateInfo `json:"templates"`
-	LastSync    time.Time              `json:"last_sync"`
+	Version    string                   `json:"version"`
+	Updated    time.Time                `json:"updated"`
+	Statistics TemplateStatistics       `json:"statistics"`
+	Templates  map[string]*TemplateInfo `json:"templates"`
+	LastSync   time.Time                `json:"last_sync"`
 }
 
 // TemplateStatistics contains template statistics
 type TemplateStatistics struct {
-	TotalTemplates     int `json:"total_templates"`
-	StandardTemplates  int `json:"standard_templates"`
-	CustomTemplates    int `json:"custom_templates"`
-	ByType             map[string]int `json:"by_type"`
-	ByPlatform         map[string]int `json:"by_platform"`
-	BySeverity         map[string]int `json:"by_severity"`
+	TotalTemplates    int            `json:"total_templates"`
+	StandardTemplates int            `json:"standard_templates"`
+	CustomTemplates   int            `json:"custom_templates"`
+	ByType            map[string]int `json:"by_type"`
+	ByPlatform        map[string]int `json:"by_platform"`
+	BySeverity        map[string]int `json:"by_severity"`
 }
 
 // TemplateInfo represents template information stored in ValKey
@@ -70,20 +70,27 @@ type TemplateInfo struct {
 	Created          time.Time         `json:"created"`
 	Updated          time.Time         `json:"updated"`
 	VulnerabilityIDs []string          `json:"vulnerability_ids"`
+	IsCustom         bool              `json:"is_custom"`
 	Content          []byte            `json:"content,omitempty"`
 	Metadata         map[string]string `json:"metadata,omitempty"`
 }
 
-// StoreTemplate stores a template in ValKey
-func (s *ValKeyTemplateStorage) StoreTemplate(ctx context.Context, template *types.Template, content []byte, isCustom bool) error {
+// StoreTemplate stores a template in ValKey with optional repository ID
+func (s *ValKeyTemplateStorage) StoreTemplate(ctx context.Context, template *types.Template, content []byte, isCustom bool, repositoryID ...string) error {
 	// Skip if client is nil (graceful degradation)
 	if s.client == nil {
 		s.logger.Warn("Cannot store template - ValKey client is nil")
 		return nil
 	}
-	
+
 	// Calculate checksum
 	checksum := s.calculateChecksum(content)
+
+	// Create template info with metadata
+	metadata := make(map[string]string)
+	if len(repositoryID) > 0 && repositoryID[0] != "" {
+		metadata["repository_id"] = repositoryID[0]
+	}
 
 	// Create template info
 	templateInfo := &TemplateInfo{
@@ -95,11 +102,12 @@ func (s *ValKeyTemplateStorage) StoreTemplate(ctx context.Context, template *typ
 		Platforms:        getPlatformsFromDetection(template.Detection),
 		DetectionType:    getDetectionType(template.Detection),
 		Author:           template.Info.Author,
-		Created:          time.Now(), // Use current time as fallback
-		Updated:          time.Now(), // Use current time as fallback
+		Created:          time.Now(),        // Use current time as fallback
+		Updated:          time.Now(),        // Use current time as fallback
 		VulnerabilityIDs: template.Info.CVE, // Use CVE field instead
+		IsCustom:         isCustom,
 		Content:          content,
-		Metadata:         make(map[string]string),
+		Metadata:         metadata,
 	}
 
 	// Determine key prefix
@@ -169,7 +177,7 @@ func (s *ValKeyTemplateStorage) GetTemplate(ctx context.Context, templateID stri
 		}
 		return nil, nil, fmt.Errorf("failed to get template: %w", err)
 	}
-	
+
 	templateData, err := resp.ToString()
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to convert template data to string: %w", err)
@@ -184,11 +192,11 @@ func (s *ValKeyTemplateStorage) GetTemplate(ctx context.Context, templateID stri
 	template := &types.Template{
 		ID: templateInfo.ID,
 		Info: types.TemplateInfo{
-			Name:        templateInfo.ID, // Use ID as name if not stored separately
-			Author:      templateInfo.Author,
-			Severity:    types.Severity(templateInfo.Severity),
-			Version:     templateInfo.Version,
-			CVE:         templateInfo.VulnerabilityIDs,
+			Name:     templateInfo.ID, // Use ID as name if not stored separately
+			Author:   templateInfo.Author,
+			Severity: types.Severity(templateInfo.Severity),
+			Version:  templateInfo.Version,
+			CVE:      templateInfo.VulnerabilityIDs,
 		},
 		Detection: types.DetectionConfig{
 			Steps: []types.DetectionStep{
@@ -202,6 +210,35 @@ func (s *ValKeyTemplateStorage) GetTemplate(ctx context.Context, templateID stri
 	return template, templateInfo.Content, nil
 }
 
+// GetTemplateMetadata retrieves template metadata from ValKey
+func (s *ValKeyTemplateStorage) GetTemplateMetadata(ctx context.Context, templateID string) (*TemplateInfo, error) {
+	if s.client == nil {
+		return nil, fmt.Errorf("ValKey client is nil")
+	}
+
+	metaKey := TemplateMetaPrefix + templateID
+	cmd := s.client.B().Get().Key(metaKey).Build()
+	resp := s.client.Do(ctx, cmd)
+	if err := resp.Error(); err != nil {
+		if valkey.IsValkeyNil(err) {
+			return nil, nil // Template not found
+		}
+		return nil, fmt.Errorf("failed to get template metadata: %w", err)
+	}
+
+	metaData, err := resp.ToString()
+	if err != nil {
+		return nil, fmt.Errorf("failed to convert metadata to string: %w", err)
+	}
+
+	var templateInfo TemplateInfo
+	if err := json.Unmarshal([]byte(metaData), &templateInfo); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal template metadata: %w", err)
+	}
+
+	return &templateInfo, nil
+}
+
 // GetTemplateManifest retrieves the global template manifest
 func (s *ValKeyTemplateStorage) GetTemplateManifest(ctx context.Context) (*TemplateManifest, error) {
 	// Return empty manifest if client is nil
@@ -213,7 +250,7 @@ func (s *ValKeyTemplateStorage) GetTemplateManifest(ctx context.Context) (*Templ
 			Templates:  make(map[string]*TemplateInfo),
 		}, nil
 	}
-	
+
 	cmd := s.client.B().Get().Key(TemplateManifestKey).Build()
 	resp := s.client.Do(ctx, cmd)
 	if err := resp.Error(); err != nil {
@@ -227,7 +264,7 @@ func (s *ValKeyTemplateStorage) GetTemplateManifest(ctx context.Context) (*Templ
 		}
 		return nil, fmt.Errorf("failed to get template manifest: %w", err)
 	}
-	
+
 	manifestData, err := resp.ToString()
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert manifest data to string: %w", err)
@@ -248,7 +285,7 @@ func (s *ValKeyTemplateStorage) UpdateTemplateManifest(ctx context.Context, mani
 		s.logger.Warn("Cannot update manifest - ValKey client is nil")
 		return nil
 	}
-	
+
 	manifest.Updated = time.Now()
 	manifestData, err := json.Marshal(manifest)
 	if err != nil {
@@ -282,12 +319,12 @@ func (s *ValKeyTemplateStorage) ListTemplates(ctx context.Context, isCustom bool
 	if err := resp.Error(); err != nil {
 		return nil, fmt.Errorf("failed to list template keys: %w", err)
 	}
-	
+
 	keyMessages, err := resp.ToArray()
 	if err != nil {
 		return nil, fmt.Errorf("failed to convert keys response to array: %w", err)
 	}
-	
+
 	keys := make([]string, len(keyMessages))
 	for i, keyMsg := range keyMessages {
 		key, err := keyMsg.ToString()
@@ -305,7 +342,7 @@ func (s *ValKeyTemplateStorage) ListTemplates(ctx context.Context, isCustom bool
 			s.logger.Warn("Failed to get template data", zap.String("key", key), zap.Error(err))
 			continue
 		}
-		
+
 		templateData, err := resp.ToString()
 		if err != nil {
 			s.logger.Warn("Failed to convert template data to string", zap.String("key", key), zap.Error(err))
@@ -374,7 +411,7 @@ func (s *ValKeyTemplateStorage) GetTemplateChecksum(ctx context.Context, templat
 		}
 		return "", fmt.Errorf("failed to get template checksum: %w", err)
 	}
-	
+
 	checksum, err := resp.ToString()
 	if err != nil {
 		return "", fmt.Errorf("failed to convert checksum to string: %w", err)
@@ -410,7 +447,7 @@ func getDetectionType(detection types.DetectionConfig) string {
 func getPlatformsFromDetection(detection types.DetectionConfig) []string {
 	var platforms []string
 	platformSet := make(map[string]bool)
-	
+
 	for _, step := range detection.Steps {
 		for _, platform := range step.Platforms {
 			if !platformSet[string(platform)] {
@@ -419,12 +456,12 @@ func getPlatformsFromDetection(detection types.DetectionConfig) []string {
 			}
 		}
 	}
-	
+
 	// If no platforms specified, assume all platforms
 	if len(platforms) == 0 {
 		platforms = []string{"linux", "windows", "darwin"}
 	}
-	
+
 	return platforms
 }
 

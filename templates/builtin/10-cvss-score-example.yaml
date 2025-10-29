@@ -1,0 +1,37 @@
+id: EXAMPLE-CVSS-SCORE-001
+info:
+  name: Authentication Bypass (CVSS Score Example)
+  author: Sirius Security
+  severity: high
+  cvss_score: 8.1 # Pre-calculated CVSS score - third priority
+  description: Demonstrates pre-calculated CVSS score assignment
+  references:
+    - https://nvd.nist.gov/vuln/detail/CVE-2024-EXAMPLE-002
+  cve:
+    - CVE-2024-EXAMPLE-002
+  tags:
+    - example
+    - cvss-score
+    - authentication
+  version: "1.0"
+
+detection:
+  logic: all
+  steps:
+    - type: file_content
+      platforms:
+        - linux
+        - darwin
+      weight: 1.0
+      config:
+        path: /etc/auth.conf
+        regex: "auth_required=false"
+
+
+
+
+
+
+
+
+

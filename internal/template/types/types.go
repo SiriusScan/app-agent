@@ -59,6 +59,21 @@ type TemplateInfo struct {
 	// Severity indicates the severity level
 	Severity Severity `json:"severity" yaml:"severity"`
 
+	// Risk Scoring Fields (all optional)
+	// Priority: RiskScore → CVSSVector → CVSSScore → Severity mapping
+
+	// RiskScore is a custom numerical score (0.0-10.0)
+	// Takes highest priority if provided
+	RiskScore *float64 `json:"risk_score,omitempty" yaml:"risk_score,omitempty"`
+
+	// CVSSVector is a CVSS v3.x vector string
+	// Used to calculate base score if RiskScore not provided
+	CVSSVector string `json:"cvss_vector,omitempty" yaml:"cvss_vector,omitempty"`
+
+	// CVSSScore is a pre-calculated CVSS score (0.0-10.0)
+	// Used if neither RiskScore nor CVSSVector provided
+	CVSSScore *float64 `json:"cvss_score,omitempty" yaml:"cvss_score,omitempty"`
+
 	// Description explains what this template detects
 	Description string `json:"description" yaml:"description"`
 
@@ -110,6 +125,13 @@ type Result struct {
 
 	// Severity is the template's severity level
 	Severity Severity `json:"severity,omitempty"`
+
+	// RiskScore is the calculated risk score (0.0-10.0)
+	// Calculated using priority system during template execution
+	RiskScore float64 `json:"risk_score"`
+
+	// CVSSVector is the CVSS vector string if provided in template
+	CVSSVector string `json:"cvss_vector,omitempty"`
 
 	// Matched indicates whether the template matched (vulnerability detected)
 	Matched bool `json:"matched"`
@@ -189,3 +211,7 @@ func IsPlatformValid(p string) bool {
 	return false
 }
 
+// ValidateRiskScore checks if a risk score is within valid range (0.0-10.0)
+func ValidateRiskScore(score float64) bool {
+	return score >= 0.0 && score <= 10.0
+}

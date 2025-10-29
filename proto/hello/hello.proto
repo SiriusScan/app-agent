@@ -94,6 +94,36 @@ message Acknowledgment {
   string status = 2;
 }
 
+// TemplateManifest represents the manifest containing all template metadata
+message TemplateManifest {
+  string version = 1;
+  int64 updated = 2; // Timestamp of last manifest update
+  map<string, TemplateMetadata> templates = 3;
+  TemplateStatistics statistics = 4;
+}
+
+// TemplateMetadata contains metadata for a single template
+message TemplateMetadata {
+  string id = 1;
+  string version = 2;
+  string checksum = 3;
+  int64 size = 4;
+  string severity = 5;
+  repeated string platforms = 6;
+  string detection_type = 7;
+  string author = 8;
+  int64 created = 9;
+  int64 updated = 10;
+  bool is_custom = 11;
+}
+
+// TemplateStatistics contains template statistics
+message TemplateStatistics {
+  int32 total_templates = 1;
+  int32 standard_templates = 2;
+  int32 custom_templates = 3;
+}
+
 // TemplateUpdate is sent from server to agent when a template is updated
 message TemplateUpdate {
   string template_id = 1;
@@ -102,6 +132,7 @@ message TemplateUpdate {
   string content = 4;
   bool is_custom = 5;
   int64 timestamp = 6;
+  TemplateManifest manifest = 7; // Optional: included as first message in sync
 }
 
 // TemplateSyncRequest is sent from agent to server to request template sync

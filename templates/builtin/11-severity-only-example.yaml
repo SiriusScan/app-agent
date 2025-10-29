@@ -1,0 +1,34 @@
+id: EXAMPLE-SEVERITY-001
+info:
+  name: Information Disclosure (Severity Mapping Example)
+  author: Sirius Security
+  severity: medium # Only severity specified - will map to 5.0 (lowest priority)
+  description: Demonstrates severity-only template (backward compatible)
+  references:
+    - https://example.com/info-disclosure
+  tags:
+    - example
+    - severity-only
+    - information-disclosure
+  version: "1.0"
+
+detection:
+  logic: all
+  steps:
+    - type: file_content
+      platforms:
+        - linux
+        - darwin
+      weight: 1.0
+      config:
+        path: /var/log/sensitive.log
+        regex: "password.*="
+
+
+
+
+
+
+
+
+

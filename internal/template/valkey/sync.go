@@ -16,20 +16,22 @@ import (
 
 // GitHubSyncManager manages synchronization with GitHub repositories
 type GitHubSyncManager struct {
-	storage     *ValKeyTemplateStorage
-	logger      *zap.Logger
-	repoPath    string
-	repoURL     string
-	lastSync    time.Time
+	storage  *ValKeyTemplateStorage
+	logger   *zap.Logger
+	repoPath string
+	repoURL  string
+	branch   string
+	lastSync time.Time
 }
 
 // NewGitHubSyncManager creates a new GitHub sync manager
-func NewGitHubSyncManager(storage *ValKeyTemplateStorage, logger *zap.Logger, repoPath, repoURL string) *GitHubSyncManager {
+func NewGitHubSyncManager(storage *ValKeyTemplateStorage, logger *zap.Logger, repoPath, repoURL, branch string) *GitHubSyncManager {
 	return &GitHubSyncManager{
 		storage:  storage,
 		logger:   logger,
 		repoPath: repoPath,
 		repoURL:  repoURL,
+		branch:   branch,
 	}
 }
 
@@ -45,39 +47,40 @@ type RepositoryManifest struct {
 
 // Component represents a repository component
 type Component struct {
-	Path    string `json:"path"`
+	Path     string `json:"path"`
 	Manifest string `json:"manifest"`
-	Version string `json:"version"`
-	Updated string `json:"updated"`
+	Version  string `json:"version"`
+	Updated  string `json:"updated"`
 }
 
 // GitHubTemplateManifest represents the templates manifest structure from GitHub
 type GitHubTemplateManifest struct {
-	Version    string                        `json:"version"`
-	Updated    string                        `json:"updated"`
-	Description string                       `json:"description"`
-	Templates  map[string]*TemplateManifestEntry `json:"templates"`
-	Statistics map[string]interface{}        `json:"statistics"`
+	Version     string                            `json:"version"`
+	Updated     string                            `json:"updated"`
+	Description string                            `json:"description"`
+	Templates   map[string]*TemplateManifestEntry `json:"templates"`
+	Statistics  map[string]interface{}            `json:"statistics"`
 }
 
 // TemplateManifestEntry represents a template entry in the manifest
 type TemplateManifestEntry struct {
-	ID               string    `json:"id"`
-	Version          string    `json:"version"`
-	Checksum         string    `json:"checksum"`
-	Size             int64     `json:"size"`
-	Severity         string    `json:"severity"`
-	Platforms        []string  `json:"platforms"`
-	DetectionType    string    `json:"detection_type"`
-	Author           string    `json:"author"`
-	Created          string    `json:"created"`
-	Updated          string    `json:"updated"`
-	VulnerabilityIDs []string  `json:"vulnerability_ids"`
+	ID               string   `json:"id"`
+	Version          string   `json:"version"`
+	Checksum         string   `json:"checksum"`
+	Size             int64    `json:"size"`
+	Severity         string   `json:"severity"`
+	Platforms        []string `json:"platforms"`
+	DetectionType    string   `json:"detection_type"`
+	Author           string   `json:"author"`
+	Created          string   `json:"created"`
+	Updated          string   `json:"updated"`
+	VulnerabilityIDs []string `json:"vulnerability_ids"`
 }
 
 // SyncFromGitHub synchronizes templates from GitHub repository
-func (g *GitHubSyncManager) SyncFromGitHub(ctx context.Context) error {
+func (g *GitHubSyncManager) SyncFromGitHub(ctx context.Context, repoID string) error {
 	g.logger.Info("Starting GitHub template sync",
+		zap.String("repo_id", repoID),
 		zap.String("repo_url", g.repoURL),
 		zap.String("repo_path", g.repoPath))
 
@@ -103,7 +106,7 @@ func (g *GitHubSyncManager) SyncFromGitHub(ctx context.Context) error {
 	var errorCount int
 
 	for templatePath, templateEntry := range templatesManifest.Templates {
-		if err := g.processTemplate(ctx, templatePath, templateEntry); err != nil {
+		if err := g.processTemplate(ctx, templatePath, templateEntry, repoID); err != nil {
 			g.logger.Error("Failed to process template",
 				zap.String("path", templatePath),
 				zap.Error(err))
@@ -144,8 +147,8 @@ func (g *GitHubSyncManager) ensureRepository(ctx context.Context) error {
 		}
 	} else {
 		// Update existing repository
-		g.logger.Info("Updating repository", zap.String("path", g.repoPath))
-		cmd := exec.CommandContext(ctx, "git", "pull", "origin", "main")
+		g.logger.Info("Updating repository", zap.String("path", g.repoPath), zap.String("branch", g.branch))
+		cmd := exec.CommandContext(ctx, "git", "pull", "origin", g.branch)
 		cmd.Dir = g.repoPath
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to update repository: %s, error: %w", string(output), err)
@@ -187,8 +190,33 @@ func (g *GitHubSyncManager) loadTemplatesManifest() (*GitHubTemplateManifest, er
 	return &manifest, nil
 }
 
+// checkTemplateConflict checks if template exists from different repository
+func (g *GitHubSyncManager) checkTemplateConflict(ctx context.Context, templateID string, currentRepoID string) error {
+	// Get template metadata to check repository source
+	metadata, err := g.storage.GetTemplateMetadata(ctx, templateID)
+	if err != nil {
+		return nil // Error getting metadata, allow processing
+	}
+	if metadata == nil {
+		return nil // No conflict - template doesn't exist
+	}
+
+	// Check if template is from a different repository
+	existingRepoID, exists := metadata.Metadata["repository_id"]
+	if exists && existingRepoID != "" && existingRepoID != currentRepoID {
+		return fmt.Errorf("template conflict: template %s already exists from repository %s (current: %s)",
+			templateID, existingRepoID, currentRepoID)
+	}
+
+	return nil
+}
+
 // processTemplate processes a single template
-func (g *GitHubSyncManager) processTemplate(ctx context.Context, templatePath string, entry *TemplateManifestEntry) error {
+func (g *GitHubSyncManager) processTemplate(ctx context.Context, templatePath string, entry *TemplateManifestEntry, repoID string) error {
+	// Check for conflicts BEFORE processing
+	if err := g.checkTemplateConflict(ctx, entry.ID, repoID); err != nil {
+		return err
+	}
 	// Read template file
 	fullPath := filepath.Join(g.repoPath, "templates", templatePath)
 	content, err := os.ReadFile(fullPath)
@@ -207,8 +235,8 @@ func (g *GitHubSyncManager) processTemplate(ctx context.Context, templatePath st
 		return fmt.Errorf("template validation failed: %w", err)
 	}
 
-	// Store template in ValKey
-	if err := g.storage.StoreTemplate(ctx, template, content, false); err != nil {
+	// Store template in ValKey with repository ID
+	if err := g.storage.StoreTemplate(ctx, template, content, false, repoID); err != nil {
 		return fmt.Errorf("failed to store template: %w", err)
 	}
 
@@ -227,11 +255,11 @@ func (g *GitHubSyncManager) parseTemplate(content []byte, entry *TemplateManifes
 	template := &types.Template{
 		ID: entry.ID,
 		Info: types.TemplateInfo{
-			Name:        entry.ID, // Use ID as name
-			Author:      entry.Author,
-			Severity:    types.Severity(entry.Severity),
-			Version:     entry.Version,
-			CVE:         entry.VulnerabilityIDs,
+			Name:     entry.ID, // Use ID as name
+			Author:   entry.Author,
+			Severity: types.Severity(entry.Severity),
+			Version:  entry.Version,
+			CVE:      entry.VulnerabilityIDs,
 		},
 		Detection: types.DetectionConfig{
 			Steps: []types.DetectionStep{
@@ -262,9 +290,9 @@ func (g *GitHubSyncManager) updateGlobalManifest(ctx context.Context, repoManife
 		TotalTemplates:    len(templatesManifest.Templates),
 		StandardTemplates: len(templatesManifest.Templates),
 		CustomTemplates:   0, // Will be updated separately
-		ByType:           make(map[string]int),
-		ByPlatform:       make(map[string]int),
-		BySeverity:       make(map[string]int),
+		ByType:            make(map[string]int),
+		ByPlatform:        make(map[string]int),
+		BySeverity:        make(map[string]int),
 	}
 
 	// Count by type, platform, and severity
@@ -300,15 +328,17 @@ func (g *GitHubSyncManager) IsSyncNeeded(interval time.Duration) bool {
 }
 
 // StartPeriodicSync starts a periodic sync goroutine
-func (g *GitHubSyncManager) StartPeriodicSync(ctx context.Context, interval time.Duration) {
+// Note: This method is deprecated in favor of queue-based sync triggered by the server
+func (g *GitHubSyncManager) StartPeriodicSync(ctx context.Context, interval time.Duration, repoID string) {
 	g.logger.Info("Starting periodic GitHub sync",
-		zap.Duration("interval", interval))
+		zap.Duration("interval", interval),
+		zap.String("repo_id", repoID))
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	// Initial sync
-	if err := g.SyncFromGitHub(ctx); err != nil {
+	if err := g.SyncFromGitHub(ctx, repoID); err != nil {
 		g.logger.Error("Initial GitHub sync failed", zap.Error(err))
 	}
 
@@ -319,7 +349,7 @@ func (g *GitHubSyncManager) StartPeriodicSync(ctx context.Context, interval time
 			g.logger.Info("Periodic GitHub sync stopped")
 			return
 		case <-ticker.C:
-			if err := g.SyncFromGitHub(ctx); err != nil {
+			if err := g.SyncFromGitHub(ctx, repoID); err != nil {
 				g.logger.Error("Periodic GitHub sync failed", zap.Error(err))
 			}
 		}

@@ -43,9 +43,9 @@ func GetAgentTemplateCacheDir() string {
 func GetAgentTemplateCacheSubdirs() map[string]string {
 	baseDir := GetAgentTemplateCacheDir()
 	return map[string]string{
-		"standard": filepath.Join(baseDir, "standard"),
-		"custom":   filepath.Join(baseDir, "custom"),
-		"manifest": filepath.Join(baseDir, ".manifest.json"),
+		"standard":  filepath.Join(baseDir, "server"), // Changed from "standard" to "server" to match actual directory structure
+		"custom":    filepath.Join(baseDir, "custom"),
+		"manifest":  filepath.Join(baseDir, ".manifest.json"),
 		"checksums": filepath.Join(baseDir, ".checksums.json"),
 	}
 }
@@ -53,13 +53,13 @@ func GetAgentTemplateCacheSubdirs() map[string]string {
 // EnsureCacheDirectoryStructure creates the cache directory structure if it doesn't exist
 func EnsureCacheDirectoryStructure() error {
 	subdirs := GetAgentTemplateCacheSubdirs()
-	
+
 	// Create base directory
 	baseDir := filepath.Dir(subdirs["standard"])
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return err
 	}
-	
+
 	// Create subdirectories
 	for name, path := range subdirs {
 		if name == "manifest" || name == "checksums" {
@@ -69,7 +69,7 @@ func EnsureCacheDirectoryStructure() error {
 			return err
 		}
 	}
-	
+
 	return nil
 }
 

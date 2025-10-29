@@ -107,28 +107,8 @@ func TestConvertTemplateResultsToVulnerabilities(t *testing.T) {
 	}
 }
 
-func TestSeverityToRiskScore(t *testing.T) {
-	tests := []struct {
-		severity      types.Severity
-		expectedScore float64
-	}{
-		{types.SeverityCritical, 9.5},
-		{types.SeverityHigh, 7.5},
-		{types.SeverityMedium, 5.0},
-		{types.SeverityLow, 2.0},
-		{types.SeverityInfo, 0.0},
-		{"unknown", 0.0}, // Unknown severity defaults to 0.0
-	}
-
-	for _, tt := range tests {
-		t.Run(string(tt.severity), func(t *testing.T) {
-			score := severityToRiskScore(tt.severity)
-			if score != tt.expectedScore {
-				t.Errorf("severity %q: got score %f, want %f", tt.severity, score, tt.expectedScore)
-			}
-		})
-	}
-}
+// Note: severityToRiskScore() function has been moved to internal/template/risk package
+// and is tested in risk/calculator_test.go. This test is no longer needed here.
 
 func TestBuildHostData(t *testing.T) {
 	fp := &fingerprint.HostFingerprint{
@@ -299,4 +279,3 @@ func TestBuildAgentMetadataWithNilResults(t *testing.T) {
 		t.Errorf("matched_count = %d, want 1", matchedCount)
 	}
 }
-

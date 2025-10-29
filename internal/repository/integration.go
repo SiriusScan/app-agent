@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"go.uber.org/zap"
 	"github.com/SiriusScan/app-agent/internal/template/agent"
+	"go.uber.org/zap"
 )
 
 // RepositoryIntegration manages integration between repository and agent components
@@ -30,31 +30,27 @@ func NewRepositoryIntegration(logger *zap.Logger) *RepositoryIntegration {
 }
 
 // Initialize sets up the repository integration with the new template system
-func (ri *RepositoryIntegration) Initialize(ctx context.Context) error {
+func (ri *RepositoryIntegration) Initialize(ctx context.Context, agentID string, serverURL string) error {
 	ri.logger.Info("Initializing repository integration with new template system")
 
-	// Initialize the new template sync manager
-	// For now, we'll create a nil ValKey client since we're not connected to server yet
-	// In a real implementation, this would be passed from the agent initialization
-	syncManager, err := agent.NewAgentSyncManager(nil, ri.logger, "localhost:8080")
+	// Initialize the new template sync manager (without ValKey client)
+	// The sync manager will communicate with the server via gRPC stream
+	syncManager, err := agent.NewAgentSyncManager(ri.logger, serverURL, agentID)
 	if err != nil {
 		return fmt.Errorf("failed to create template sync manager: %w", err)
 	}
 	ri.syncManager = syncManager
 
-	// Perform initial template sync from server
-	ri.logger.Info("Performing initial template sync from server")
-	if err := ri.syncManager.SyncFromServer(ctx); err != nil {
-		ri.logger.Warn("Initial template sync failed, continuing with cached templates", zap.Error(err))
-		// This is expected if the server doesn't have ValKey configured yet
-		ri.logger.Info("Template sync will be available once server ValKey is configured")
-	} else {
-		ri.logger.Info("Initial template sync completed successfully")
-	}
+	// Note: gRPC stream will be set later by the agent after connection is established
+	// Initial template sync will be triggered by the agent after stream is ready
+
+	ri.logger.Info("Template sync manager initialized, waiting for gRPC stream")
 
 	// Create a minimal configuration for compatibility
+	// Note: Repository URLs are now managed by the server via RepositoryManager
+	// This configuration is maintained for backward compatibility
 	ri.config = &RepositoryConfiguration{
-		RemoteURL:        "https://github.com/SiriusScan/sirius-agent-modules",
+		RemoteURL:        "",                               // Now managed by server's RepositoryManager
 		LocalPath:        agent.GetAgentTemplateCacheDir(), // Use OS-agnostic cache directory
 		UpdateInterval:   24 * time.Hour,
 		UpdateStrategy:   UpdateStrategyIncremental,
@@ -71,6 +67,11 @@ func (ri *RepositoryIntegration) Initialize(ctx context.Context) error {
 	return nil
 }
 
+// GetSyncManager returns the sync manager instance
+func (ri *RepositoryIntegration) GetSyncManager() *agent.AgentSyncManager {
+	return ri.syncManager
+}
+
 // LoadTemplatesFromRepository loads templates from the cached template system
 func (ri *RepositoryIntegration) LoadTemplatesFromRepository(ctx context.Context) ([]string, error) {
 	if !ri.initialized {
@@ -83,11 +84,11 @@ func (ri *RepositoryIntegration) LoadTemplatesFromRepository(ctx context.Context
 	templates, err := ri.syncManager.LoadTemplates(ctx)
 	if err != nil {
 		ri.logger.Warn("Failed to load templates from cache, falling back to directory scan", zap.Error(err))
-		
+
 		// Fallback: scan the cache directory for template files
 		cacheDir := agent.GetAgentTemplateCacheDir()
 		var templatePaths []string
-		
+
 		err := filepath.Walk(cacheDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil {
 				return err
@@ -97,11 +98,11 @@ func (ri *RepositoryIntegration) LoadTemplatesFromRepository(ctx context.Context
 			}
 			return nil
 		})
-		
+
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan cache directory: %w", err)
 		}
-		
+
 		ri.logger.Info("Templates loaded from cache directory scan",
 			zap.Int("count", len(templatePaths)),
 			zap.Strings("paths", templatePaths))
@@ -273,16 +274,16 @@ func (ri *RepositoryIntegration) GetRepositoryStatus() (*RepositoryIntegrationSt
 	// For now, return basic status since we don't have a GetCacheStatistics method
 	// In a real implementation, we would get this from the sync manager
 	status := &RepositoryIntegrationStatus{
-		Initialized:    ri.initialized,
-		LocalPath:      ri.config.LocalPath,
-		RemoteURL:      ri.config.RemoteURL,
-		CurrentVersion: "template-system-v2", // New template system version
-		LastUpdate:     time.Now(), // Placeholder
-		TemplateCount:  0, // Will be populated when templates are loaded
-		ScriptCount:    0, // Scripts are now part of templates
-		TotalSize:      0, // Will be calculated from cache
-		Status:         "active",
-		ManifestVersion: "2.0.0", // New manifest format
+		Initialized:     ri.initialized,
+		LocalPath:       ri.config.LocalPath,
+		RemoteURL:       ri.config.RemoteURL,
+		CurrentVersion:  "template-system-v2", // New template system version
+		LastUpdate:      time.Now(),           // Placeholder
+		TemplateCount:   0,                    // Will be populated when templates are loaded
+		ScriptCount:     0,                    // Scripts are now part of templates
+		TotalSize:       0,                    // Will be calculated from cache
+		Status:          "active",
+		ManifestVersion: "2.0.0",    // New manifest format
 		ManifestUpdated: time.Now(), // Placeholder
 	}
 

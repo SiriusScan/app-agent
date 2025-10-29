@@ -11,7 +11,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/SiriusScan/app-agent/internal/agent"
+	"github.com/SiriusScan/app-agent/internal/commands/template"
 	"github.com/SiriusScan/app-agent/internal/config"
+	"github.com/SiriusScan/app-agent/internal/repository"
 )
 
 // NewServerCommand creates the server command for agent mode.
@@ -74,6 +76,30 @@ Examples:
 				logger.Fatal("Failed to connect agent", zap.Error(err))
 			}
 			defer a.Close()
+
+			// Initialize repository integration with template sync
+			logger.Info("Initializing template synchronization")
+			repoIntegration := repository.NewRepositoryIntegration(logger)
+			if err := repoIntegration.Initialize(ctx, cfg.AgentID, cfg.ServerAddress); err != nil {
+				logger.Warn("Failed to initialize repository integration", zap.Error(err))
+			} else {
+				// Get the sync manager from repository integration
+				syncManager := repoIntegration.GetSyncManager()
+				if syncManager != nil {
+					// IMPORTANT: Set the gRPC stream reference so sync manager can communicate with server
+					syncManager.SetGRPCStream(a.GetStream())
+
+					// Set sync manager on agent so it can handle template updates
+					a.SetSyncManager(syncManager)
+
+					// Register sync manager with template command for internal:template sync
+					template.SetGlobalSyncManager(syncManager)
+
+					logger.Info("Template synchronization initialized successfully")
+				} else {
+					logger.Warn("Sync manager not available from repository integration")
+				}
+			}
 
 			// Handle termination signals
 			signalChan := make(chan os.Signal, 1)

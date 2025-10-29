@@ -280,39 +280,70 @@ func newTemplateListCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List available templates",
-		Long: `Discover and list all available templates in the specified directory.
+		Long: `Discover and list all available templates.
 
-By default, lists templates from the current directory.
-Use --directory to specify a different location.
+By default, uses the template manager to discover templates from all sources:
+  1. Custom templates (highest priority)
+  2. Server-synced templates
+  3. Built-in templates (embedded in binary)
+
+Use --directory to search a specific directory instead.
 
 Examples:
-  sirius-agent template list
-  sirius-agent template list --directory ./templates/
-  sirius-agent template list --format text`,
+  sirius-agent template list                          # Use template manager
+  sirius-agent template list --directory ./templates/ # Specific directory
+  sirius-agent template list --format json`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Discover templates
-			templates, errors := parser.DiscoverTemplates(directory)
+			ctx := context.Background()
+			var templates []*types.Template
+			var errors []error
+			var sourceInfo string
+
+			if directory != "" {
+				// Specific directory provided
+				templates, errors = parser.DiscoverTemplates(directory)
+				sourceInfo = directory
+			} else {
+				// Use template manager (default)
+				logger := zap.NewNop()
+				manager, err := storage.NewManager(logger)
+				if err != nil {
+					return fmt.Errorf("failed to initialize template manager: %w", err)
+				}
+
+				templates, err = manager.DiscoverTemplates(ctx)
+				if err != nil {
+					return fmt.Errorf("failed to discover templates: %w", err)
+				}
+				sourceInfo = manager.GetStoragePath()
+
+				if format == "text" {
+					fmt.Fprintf(os.Stderr, "📁 Using template manager (base: %s)\n\n", sourceInfo)
+				}
+			}
 
 			if len(errors) > 0 && format == "text" {
 				fmt.Fprintf(os.Stderr, "⚠️  Discovery errors:\n")
 				for _, err := range errors {
 					fmt.Fprintf(os.Stderr, "  - %v\n", err)
 				}
+				fmt.Fprintln(os.Stderr)
 			}
 
 			if len(templates) == 0 {
 				if format == "text" {
-					fmt.Printf("No templates found in %s\n", directory)
+					fmt.Printf("No templates found\n")
 				}
 				return nil
 			}
 
 			// Output template list
 			if format == "text" {
-				fmt.Printf("📋 Found %d template(s) in %s:\n\n", len(templates), directory)
+				fmt.Printf("📋 Found %d template(s):\n\n", len(templates))
 				for i, t := range templates {
 					fmt.Printf("%d. %s (%s)\n", i+1, t.Info.Name, t.ID)
 					fmt.Printf("   Severity: %s\n", t.Info.Severity)
+					fmt.Printf("   Author: %s\n", t.Info.Author)
 					fmt.Printf("   Steps: %d\n", len(t.Detection.Steps))
 					if t.FilePath != "" {
 						fmt.Printf("   File: %s\n", t.FilePath)
@@ -341,7 +372,7 @@ Examples:
 		},
 	}
 
-	cmd.Flags().StringVarP(&directory, "directory", "d", ".", "Directory to search for templates")
+	cmd.Flags().StringVarP(&directory, "directory", "d", "", "Directory to search for templates (defaults to template manager)")
 
 	return cmd
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/SiriusScan/app-agent/internal/modules/registry"
+	"github.com/SiriusScan/app-agent/internal/template/risk"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
 
@@ -74,11 +75,16 @@ func (e *Executor) ExecuteTemplate(ctx context.Context, template *types.Template
 	// Calculate confidence
 	confidence := e.calculateConfidence(template.Detection.Logic, stepResults, applicableSteps)
 
+	// Calculate risk score using priority system
+	riskScore, _ := risk.CalculateRiskScore(template.Info)
+
 	// Build final result
 	result := &types.Result{
 		TemplateID:   template.ID,
 		TemplateName: template.Info.Name,
 		Severity:     template.Info.Severity,
+		RiskScore:    riskScore,
+		CVSSVector:   template.Info.CVSSVector,
 		Matched:      matched,
 		Confidence:   confidence,
 		Steps:        stepResults,
@@ -126,6 +132,15 @@ func (e *Executor) executeStep(ctx context.Context, step types.DetectionStep, in
 		Error:    "",
 		Duration: 0,
 	}
+
+	// Panic recovery - defense in depth
+	defer func() {
+		if r := recover(); r != nil {
+			stepResult.Error = fmt.Sprintf("step panicked: %v", r)
+			stepResult.Duration = time.Since(startTime)
+			stepResult.Matched = false
+		}
+	}()
 
 	// Get module from registry
 	module := registry.Get(step.Type)
