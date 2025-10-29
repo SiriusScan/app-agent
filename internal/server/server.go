@@ -112,8 +112,10 @@ type Server struct {
 	pendingCommands      map[string]string // Key: agentID:commandString, Value: agentID:timestampID
 
 	// Template management
-	templateManager *ServerTemplateManager
-	valkeyClient    valkey.Client
+	templateManager    *ServerTemplateManager
+	repositoryManager  *RepositoryManager
+	syncQueueProcessor *TemplateSyncQueueProcessor
+	valkeyClient       valkey.Client
 }
 
 // NewServer creates a new HelloService server
@@ -136,10 +138,12 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 	}
 
 	// Initialize ValKey client for template storage
-	// For now, we'll create a nil client since ValKey integration needs to be configured
-	// In a real deployment, this would connect to the ValKey instance
-	var valkeyClient valkey.Client = nil
-	logger.Info("ValKey client initialized (nil for now - needs configuration)")
+	valkeyClient, err := NewValkeyClient(logger)
+	if err != nil {
+		logger.Warn("Failed to initialize ValKey client, templates will not be stored",
+			zap.Error(err))
+		valkeyClient = nil
+	}
 
 	// Create server instance first
 	server := &Server{
@@ -154,21 +158,61 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 	}
 
 	// Initialize template manager with server reference
+	// Note: RepoURL is now deprecated in favor of RepositoryManager
 	templateConfig := &TemplateConfig{
-		RepoURL:         "https://github.com/SiriusScan/sirius-agent-modules",
+		RepoURL:         "", // Deprecated: Now managed by RepositoryManager
 		RepoPath:        "/var/sirius/template-repos/sirius-agent-modules",
+		RepoBranch:      "main",
+		RepoID:          "sirius-agent-modules",
 		SyncInterval:    24 * time.Hour,
 		MaxTemplateSize: 1024 * 1024, // 1MB
 	}
-	
+
 	templateManager := NewServerTemplateManager(valkeyClient, logger, templateConfig, server)
 	server.templateManager = templateManager
-	logger.Info("Template manager initialized")
+	logger.Info("Template manager initialized (legacy - will be replaced by RepositoryManager)")
 
-	// Start periodic template sync (only if ValKey client is available)
-	// For now, we'll start it anyway since the template manager handles nil clients gracefully
-	go server.startTemplateSync()
-	logger.Info("Template sync started (will be limited without ValKey client)")
+	// Initialize repository manager for multi-repo support
+	if valkeyClient != nil {
+		repositoryManager := NewRepositoryManager(
+			valkeyClient,
+			logger,
+			"/opt/sirius/agent-templates/repos",
+			server,
+		)
+		server.repositoryManager = repositoryManager
+
+		// Initialize default repository if none exist
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := repositoryManager.InitializeDefaultRepository(ctx); err != nil {
+			logger.Warn("Failed to initialize default repository", zap.Error(err))
+		}
+		cancel()
+
+		// Create and start sync queue processor
+		syncQueueProcessor := NewTemplateSyncQueueProcessor(repositoryManager, logger)
+		server.syncQueueProcessor = syncQueueProcessor
+		if err := syncQueueProcessor.StartListening(); err != nil {
+			logger.Error("Failed to start sync queue processor", zap.Error(err))
+		} else {
+			logger.Info("Template sync queue processor started")
+		}
+
+		// Perform initial sync of all repositories
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+
+			logger.Info("Performing initial repository sync")
+			if err := repositoryManager.SyncAllRepositories(ctx); err != nil {
+				logger.Error("Initial repository sync failed", zap.Error(err))
+			} else {
+				logger.Info("Initial repository sync completed successfully")
+			}
+		}()
+	} else {
+		logger.Warn("ValKey client not available, repository management disabled")
+	}
 
 	return server, nil
 }
@@ -257,6 +301,9 @@ func (s *Server) ConnectStream(stream pb.HelloService_ConnectStreamServer) error
 
 		case pb.MessageType_RESULT:
 			s.handleCommandResult(agentID, msg.GetResult())
+
+		case pb.MessageType_TEMPLATE_SYNC_REQUEST:
+			s.handleTemplateSyncRequest(agentID, msg.GetSyncRequest(), stream)
 
 		default:
 			s.logger.Warn("Received unknown message type",
@@ -429,6 +476,87 @@ func (s *Server) sendCommandAcknowledgment(agentID string, result *pb.CommandRes
 			zap.String("agent_id", agentID),
 			zap.Error(err))
 	}
+}
+
+// handleTemplateSyncRequest processes template sync requests from agents
+func (s *Server) handleTemplateSyncRequest(agentID string, syncReq *pb.TemplateSyncRequest, stream pb.HelloService_ConnectStreamServer) {
+	if syncReq == nil {
+		s.logger.Warn("Received nil template sync request", zap.String("agent_id", agentID))
+		return
+	}
+
+	s.logger.Info("Processing template sync request",
+		zap.String("agent_id", agentID),
+		zap.Int64("last_sync", syncReq.LastSync))
+
+	ctx := context.Background()
+
+	// Get templates for sync from template manager
+	manifest, templates, err := s.templateManager.GetTemplatesForSync(ctx, syncReq.LastSync)
+	if err != nil {
+		s.logger.Error("Failed to get templates for sync",
+			zap.String("agent_id", agentID),
+			zap.Error(err))
+		return
+	}
+
+	s.logger.Info("Retrieved templates for sync",
+		zap.String("agent_id", agentID),
+		zap.Int("template_count", len(templates)))
+
+	// Send manifest as first message (with empty template content)
+	manifestMsg := &pb.ServerMessage{
+		Id:   fmt.Sprintf("template-manifest-%d", time.Now().Unix()),
+		Type: pb.MessageType_TEMPLATE_UPDATE,
+		Payload: &pb.ServerMessage_TemplateUpdate{
+			TemplateUpdate: &pb.TemplateUpdate{
+				Manifest: manifest,
+			},
+		},
+	}
+
+	if err := stream.Send(manifestMsg); err != nil {
+		s.logger.Error("Failed to send template manifest",
+			zap.String("agent_id", agentID),
+			zap.Error(err))
+		return
+	}
+
+	s.logger.Info("Sent template manifest to agent",
+		zap.String("agent_id", agentID))
+
+	// Stream templates one-by-one
+	successCount := 0
+	errorCount := 0
+
+	for _, template := range templates {
+		templateMsg := &pb.ServerMessage{
+			Id:   fmt.Sprintf("template-%s-%d", template.TemplateId, time.Now().Unix()),
+			Type: pb.MessageType_TEMPLATE_UPDATE,
+			Payload: &pb.ServerMessage_TemplateUpdate{
+				TemplateUpdate: template,
+			},
+		}
+
+		if err := stream.Send(templateMsg); err != nil {
+			s.logger.Error("Failed to send template",
+				zap.String("agent_id", agentID),
+				zap.String("template_id", template.TemplateId),
+				zap.Error(err))
+			errorCount++
+			continue
+		}
+
+		successCount++
+		s.logger.Debug("Sent template to agent",
+			zap.String("agent_id", agentID),
+			zap.String("template_id", template.TemplateId))
+	}
+
+	s.logger.Info("Template sync completed",
+		zap.String("agent_id", agentID),
+		zap.Int("success", successCount),
+		zap.Int("errors", errorCount))
 }
 
 // StartQueueProcessor starts listening for commands on the agent queue
@@ -736,6 +864,11 @@ func (s *Server) Stop() {
 		s.queueCancel()
 	}
 
+	// Stop sync queue processor
+	if s.syncQueueProcessor != nil {
+		s.syncQueueProcessor.Stop()
+	}
+
 	// Stop the gRPC server
 	if s.server != nil {
 		s.server.GracefulStop()
@@ -854,23 +987,27 @@ func (s *Server) ListPendingCommands() []*CommandStatus {
 	return pending
 }
 
-// startTemplateSync starts the periodic template synchronization
+// startTemplateSync is deprecated - now using repository-based sync via RabbitMQ
+// The new system uses RepositoryManager which syncs multiple repositories based on
+// messages received from the agent.template.sync.jobs queue.
+// This provides better control and allows scheduled syncs managed by the UI.
+/*
 func (s *Server) startTemplateSync() {
 	s.logger.Info("Starting periodic template sync")
-	
+
 	ticker := time.NewTicker(s.templateManager.config.SyncInterval)
 	defer ticker.Stop()
-	
+
 	// Perform initial sync
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	
+
 	if err := s.templateManager.SyncFromGitHub(ctx); err != nil {
 		s.logger.Error("Initial template sync failed", zap.Error(err))
 	} else {
 		s.logger.Info("Initial template sync completed successfully")
 	}
-	
+
 	// Periodic sync
 	for {
 		select {
@@ -885,3 +1022,4 @@ func (s *Server) startTemplateSync() {
 		}
 	}
 }
+*/
