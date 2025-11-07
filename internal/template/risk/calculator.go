@@ -61,3 +61,5 @@ func severityToRiskScore(severity types.Severity) float64 {
 
 
 
+
+
