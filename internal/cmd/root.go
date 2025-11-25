@@ -34,7 +34,7 @@ Examples:
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			// Default behavior: start server mode
-			return fmt.Errorf("server mode not implemented in MVP - use template/module commands")
+			return NewServerCommand().RunE(cmd, args)
 		},
 	}
 
