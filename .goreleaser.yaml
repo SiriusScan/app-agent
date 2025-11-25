@@ -28,10 +28,6 @@ builds:
       - -X main.version={{.Version}}
       - -X main.commit={{.Commit}}
       - -X main.date={{.Date}}
-    # Ignore unsupported combinations
-    ignore:
-      - goos: windows
-        goarch: arm64  # Windows ARM64 support is limited
 
 archives:
   - id: default
@@ -108,7 +104,10 @@ release:
     ```
     
     **Windows (amd64)**
-    Download the `.zip` file below and extract `sirius-agent.exe` to a directory in your PATH.
+    Download the `sirius-agent_{{.Version}}_windows_amd64.zip` file below and extract `sirius-agent.exe` to a directory in your PATH.
+    
+    **Windows (ARM64)**
+    Download the `sirius-agent_{{.Version}}_windows_arm64.zip` file below and extract `sirius-agent.exe` to a directory in your PATH.
 
   footer: |
     ---
