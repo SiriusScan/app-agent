@@ -111,7 +111,7 @@ detection:
   - type: file_content
     path: /etc/shadow
     regex: "root::\\$"
-    
+
   - type: file_content
     path: /etc/passwd
     regex: "root::0:0"
@@ -127,12 +127,12 @@ See [documentation/README.template-architect-guide.md](documentation/README.temp
 
 ## Configuration
 
-| Environment Variable | Description | Default |
-|---------------------|-------------|---------|
-| `SIRIUS_SERVER_ADDRESS` | Server gRPC address | `localhost:50051` |
-| `SIRIUS_AGENT_ID` | Unique agent identifier | hostname |
-| `SIRIUS_TEMPLATE_DIR` | Local template directory | `~/.sirius/templates` |
-| `SIRIUS_LOG_LEVEL` | Logging verbosity | `info` |
+| Environment Variable    | Description              | Default               |
+| ----------------------- | ------------------------ | --------------------- |
+| `SIRIUS_SERVER_ADDRESS` | Server gRPC address      | `localhost:50051`     |
+| `SIRIUS_AGENT_ID`       | Unique agent identifier  | hostname              |
+| `SIRIUS_TEMPLATE_DIR`   | Local template directory | `~/.sirius/templates` |
+| `SIRIUS_LOG_LEVEL`      | Logging verbosity        | `info`                |
 
 ## Development
 

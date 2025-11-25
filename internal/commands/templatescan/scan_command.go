@@ -2,7 +2,6 @@ package templatescan
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"runtime"
 	"strconv"
@@ -13,9 +12,9 @@ import (
 
 	"github.com/SiriusScan/app-agent/internal/commands"
 	"github.com/SiriusScan/app-agent/internal/commands/scan" // For package enumeration
-	"github.com/SiriusScan/app-agent/internal/common/color"
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register module
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"    // Register module
+	"github.com/SiriusScan/app-agent/internal/output"
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/fingerprint"
 	"github.com/SiriusScan/app-agent/internal/template/parser"
@@ -36,7 +35,7 @@ func init() {
 }
 
 // Execute runs the template scan command
-func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo, commandString string, args string) (output string, err error) {
+func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo, commandString string, args string) (string, error) {
 	agentInfo.Logger.Info("Executing template scan command",
 		zap.String("args", args))
 
@@ -133,8 +132,8 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 		go submitTemplateResultsToAPI(ctx, agentInfo, results, executionTime)
 	}
 
-	// Build output
-	return c.generateOutput(templates, results, discoveryErrors, execErrors, executionTime, config.Format)
+	// Build output using the output package
+	return c.generateOutput(results, discoveryErrors, execErrors, executionTime, config)
 }
 
 // parseArgs parses command arguments
@@ -203,8 +202,8 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 			}
 			i++
 			format := parts[i]
-			if format != "json" && format != "jsonl" && format != "json-array" && format != "text" {
-				return nil, fmt.Errorf("invalid format: %s (must be 'json', 'jsonl', 'json-array', or 'text')", format)
+			if !output.IsValidFormat(format) {
+				return nil, fmt.Errorf("invalid format: %s (valid: %s)", format, strings.Join(output.AvailableStrings(), ", "))
 			}
 			config.Format = format
 
@@ -221,219 +220,26 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 	return config, nil
 }
 
-// generateOutput generates command output in the requested format
+// generateOutput generates command output using the output package formatters
 func (c *ScanCommand) generateOutput(
-	templates []*types.Template,
 	results []*types.Result,
 	discoveryErrors []error,
 	execErrors []error,
 	executionTime time.Duration,
-	format string,
+	config *ScanConfig,
 ) (string, error) {
-	switch format {
-	case "text":
-		return c.generateTextOutput(templates, results, discoveryErrors, execErrors, executionTime)
-	case "jsonl":
-		return c.generateJSONLOutput(templates, results, discoveryErrors, execErrors, executionTime)
-	case "json-array":
-		return c.generateJSONArrayOutput(templates, results, discoveryErrors, execErrors, executionTime)
-	default: // "json"
-		return c.generateJSONOutput(templates, results, discoveryErrors, execErrors, executionTime)
-	}
-}
-
-// generateJSONOutput generates JSON formatted output
-func (c *ScanCommand) generateJSONOutput(
-	templates []*types.Template,
-	results []*types.Result,
-	discoveryErrors []error,
-	execErrors []error,
-	executionTime time.Duration,
-) (string, error) {
-	matchedCount := 0
-	for _, result := range results {
-		if result != nil && result.Matched {
-			matchedCount++
-		}
-	}
-
-	// Convert errors to strings
-	var discoveryErrorStrings []string
-	for _, err := range discoveryErrors {
-		discoveryErrorStrings = append(discoveryErrorStrings, err.Error())
-	}
-	var execErrorStrings []string
-	for _, err := range execErrors {
-		execErrorStrings = append(execErrorStrings, err.Error())
-	}
-
-	output := struct {
-		Summary struct {
-			TotalTemplates  int   `json:"total_templates"`
-			Matched         int   `json:"matched"`
-			ExecutionTimeMs int64 `json:"execution_time_ms"`
-			Workers         int   `json:"workers"`
-		} `json:"summary"`
-		Results         []*types.Result `json:"results"`
-		DiscoveryErrors []string        `json:"discovery_errors,omitempty"`
-		ExecutionErrors []string        `json:"execution_errors,omitempty"`
-	}{}
-
-	output.Summary.TotalTemplates = len(templates)
-	output.Summary.Matched = matchedCount
-	output.Summary.ExecutionTimeMs = executionTime.Milliseconds()
-	output.Summary.Workers = runtime.NumCPU()
-	output.Results = results
-	output.DiscoveryErrors = discoveryErrorStrings
-	output.ExecutionErrors = execErrorStrings
-
-	jsonData, err := json.MarshalIndent(output, "", "  ")
+	// Get the appropriate formatter
+	formatter, err := output.GetByString(config.Format)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal JSON: %w", err)
+		// Fall back to JSON if format not found
+		formatter = output.MustGet(output.FormatJSON)
 	}
 
-	return string(jsonData), nil
-}
+	// Create summary
+	summary := output.NewScanSummary(results, executionTime, config.Workers)
 
-// generateJSONLOutput generates JSONL formatted output (one JSON object per line)
-func (c *ScanCommand) generateJSONLOutput(
-	templates []*types.Template,
-	results []*types.Result,
-	discoveryErrors []error,
-	execErrors []error,
-	executionTime time.Duration,
-) (string, error) {
-	var output strings.Builder
-
-	// Each result is a separate JSON line
-	for _, result := range results {
-		if result == nil {
-			continue
-		}
-
-		jsonData, err := json.Marshal(result)
-		if err != nil {
-			return "", fmt.Errorf("failed to marshal result: %w", err)
-		}
-
-		output.WriteString(string(jsonData))
-		output.WriteString("\n")
-	}
-
-	return output.String(), nil
-}
-
-// generateJSONArrayOutput generates JSON array formatted output
-func (c *ScanCommand) generateJSONArrayOutput(
-	templates []*types.Template,
-	results []*types.Result,
-	discoveryErrors []error,
-	execErrors []error,
-	executionTime time.Duration,
-) (string, error) {
-	// Simple array of results
-	jsonData, err := json.MarshalIndent(results, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal JSON array: %w", err)
-	}
-
-	return string(jsonData), nil
-}
-
-// generateTextOutput generates human-readable text output
-func (c *ScanCommand) generateTextOutput(
-	templates []*types.Template,
-	results []*types.Result,
-	discoveryErrors []error,
-	execErrors []error,
-	executionTime time.Duration,
-) (string, error) {
-	var output strings.Builder
-
-	output.WriteString("🔍 Template Scan Results\n")
-	output.WriteString(strings.Repeat("=", 50) + "\n\n")
-
-	// Summary
-	matchedCount := 0
-	for _, result := range results {
-		if result != nil && result.Matched {
-			matchedCount++
-		}
-	}
-
-	output.WriteString("📊 Summary:\n")
-	output.WriteString(fmt.Sprintf("  Total Templates: %d\n", len(templates)))
-	output.WriteString(fmt.Sprintf("  Matched: %d\n", matchedCount))
-	output.WriteString(fmt.Sprintf("  Execution Time: %v\n\n", executionTime.Round(time.Millisecond)))
-
-	// Discovery Errors
-	if len(discoveryErrors) > 0 {
-		output.WriteString(fmt.Sprintf("⚠️  Discovery Errors (%d):\n", len(discoveryErrors)))
-		for i, err := range discoveryErrors {
-			output.WriteString(fmt.Sprintf("  %d. %v\n", i+1, err))
-		}
-		output.WriteString("\n")
-	}
-
-	// Execution Errors
-	if len(execErrors) > 0 {
-		output.WriteString(fmt.Sprintf("⚠️  Execution Errors (%d):\n", len(execErrors)))
-		for i, err := range execErrors {
-			output.WriteString(fmt.Sprintf("  %d. %v\n", i+1, err))
-		}
-		output.WriteString("\n")
-	}
-
-	// Results
-	output.WriteString("📋 Template Results:\n\n")
-	for i, result := range results {
-		if result == nil {
-			output.WriteString(fmt.Sprintf("[%d] ❓ Unknown result\n", i+1))
-			continue
-		}
-
-		status := "❌"
-		if result.Matched {
-			status = "✅"
-		}
-
-		output.WriteString(fmt.Sprintf("[%d] %s %s (ID: %s)\n", i+1, status, result.TemplateName, result.TemplateID))
-
-		// Color-code severity
-		severityText := color.ColorizedSeverity(string(result.Severity))
-		output.WriteString(fmt.Sprintf("    Severity: %s | Confidence: %.2f\n", severityText, result.Confidence))
-
-		if result.Matched && len(result.Steps) > 0 {
-			output.WriteString(fmt.Sprintf("    Matched Steps: %d/%d\n", countMatchedSteps(result), len(result.Steps)))
-		}
-
-		if len(result.Errors) > 0 {
-			output.WriteString(fmt.Sprintf("    Errors: %s\n", strings.Join(result.Errors, ", ")))
-		}
-		output.WriteString("\n")
-	}
-
-	output.WriteString(strings.Repeat("=", 50) + "\n")
-	if matchedCount > 0 {
-		message := color.Colorize("⚠️  Vulnerabilities detected!", color.BrightRed+color.Bold)
-		output.WriteString(message + "\n")
-	} else {
-		message := color.Colorize("✅ No vulnerabilities detected.", color.BrightGreen+color.Bold)
-		output.WriteString(message + "\n")
-	}
-
-	return output.String(), nil
-}
-
-// countMatchedSteps counts how many steps matched in a result
-func countMatchedSteps(result *types.Result) int {
-	count := 0
-	for _, step := range result.Steps {
-		if step.Matched {
-			count++
-		}
-	}
-	return count
+	// Format output
+	return formatter.FormatScanResults(results, summary)
 }
 
 // ScanConfig holds configuration for the scan command

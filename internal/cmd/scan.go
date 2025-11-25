@@ -9,6 +9,7 @@ import (
 
 	"github.com/SiriusScan/app-agent/internal/commands"
 	"github.com/SiriusScan/app-agent/internal/config"
+	"github.com/SiriusScan/app-agent/internal/output"
 	"github.com/SiriusScan/app-agent/internal/template/storage"
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -17,9 +18,8 @@ import (
 // NewScanCommand creates the scan command for CLI usage.
 func NewScanCommand() *cobra.Command {
 	var (
-		scripts      []string
-		listOnly     bool
-		outputFormat string
+		scripts  []string
+		listOnly bool
 	)
 
 	scanCmd := &cobra.Command{
@@ -36,8 +36,13 @@ Examples:
   sirius-agent scan --scripts=script1.sh,script2.sh   # Run multiple scripts
   sirius-agent scan --list-templates                   # List available templates (alias)
   sirius-agent scan --format json                      # Output as JSON (default)
+  sirius-agent scan --format table                     # Output as table
   sirius-agent scan --format text                      # Output as human-readable text`,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := ValidateFormat(); err != nil {
+				return err
+			}
+
 			// Handle --list-templates alias
 			if listOnly {
 				return listTemplatesShortcut()
@@ -74,26 +79,36 @@ Examples:
 
 			// Execute the scan command
 			ctx := context.Background()
-			output, err := commands.Dispatch(ctx, agentInfo, commandString+" "+argsString)
+			jsonOutput, err := commands.Dispatch(ctx, agentInfo, commandString+" "+argsString)
 			if err != nil {
 				return fmt.Errorf("scan execution failed: %w", err)
 			}
 
-			// Parse and display output
-			if outputFormat == "text" {
-				return displayScanResultText(output)
+			// Parse JSON output into our output types
+			var scanResult output.SystemScanResult
+			if err := json.Unmarshal([]byte(jsonOutput), &scanResult); err != nil {
+				// If parsing fails, fall back to raw output for JSON format
+				if format == "json" {
+					fmt.Println(jsonOutput)
+					return nil
+				}
+				return fmt.Errorf("failed to parse scan results: %w", err)
 			}
 
-			// Default: JSON output
-			fmt.Println(output)
-			return nil
+			// Format and output using the selected formatter
+			formatter := GetFormatter()
+			formatted, err := formatter.FormatSystemScan(&scanResult)
+			if err != nil {
+				return fmt.Errorf("failed to format output: %w", err)
+			}
+
+			return WriteOutput(formatted)
 		},
 	}
 
 	// Flags
 	scanCmd.Flags().StringSliceVar(&scripts, "scripts", []string{}, "Comma-separated list of custom scripts to execute")
 	scanCmd.Flags().BoolVar(&listOnly, "list-templates", false, "List available templates (shortcut for 'template list')")
-	scanCmd.Flags().StringVar(&outputFormat, "format", "json", "Output format (json, text)")
 
 	return scanCmd
 }
@@ -121,90 +136,14 @@ func listTemplatesShortcut() error {
 		return nil
 	}
 
-	// Output template list
-	fmt.Printf("📋 Found %d template(s):\n\n", len(templates))
-	for i, t := range templates {
-		fmt.Printf("%d. %s (%s)\n", i+1, t.Info.Name, t.ID)
-		fmt.Printf("   Severity: %s\n", t.Info.Severity)
-		fmt.Printf("   Steps: %d\n", len(t.Detection.Steps))
-		if t.FilePath != "" {
-			fmt.Printf("   File: %s\n", t.FilePath)
-		}
-		if i < len(templates)-1 {
-			fmt.Println()
-		}
+	// Use the formatter for output
+	formatter := GetFormatter()
+	formatted, err := formatter.FormatTemplateList(templates)
+	if err != nil {
+		return fmt.Errorf("failed to format output: %w", err)
 	}
 
-	return nil
-}
-
-// displayScanResultText formats scan results as human-readable text
-func displayScanResultText(jsonOutput string) error {
-	var result struct {
-		OSInfo struct {
-			OS        string `json:"os"`
-			Version   string `json:"version"`
-			Hostname  string `json:"hostname"`
-			PrimaryIP string `json:"primary_ip"`
-		} `json:"os_info"`
-		Packages      []interface{}          `json:"packages"`
-		CustomResults map[string]interface{} `json:"custom_results"`
-		ScanErrors    []string               `json:"scan_errors"`
-	}
-
-	if err := json.Unmarshal([]byte(jsonOutput), &result); err != nil {
-		return fmt.Errorf("failed to parse scan results: %w", err)
-	}
-
-	fmt.Println("📊 System Scan Results")
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println()
-
-	// OS Information
-	fmt.Println("🖥️  System Information:")
-	fmt.Printf("   OS: %s\n", result.OSInfo.OS)
-	fmt.Printf("   Version: %s\n", result.OSInfo.Version)
-	fmt.Printf("   Hostname: %s\n", result.OSInfo.Hostname)
-	fmt.Printf("   Primary IP: %s\n", result.OSInfo.PrimaryIP)
-	fmt.Println()
-
-	// Packages
-	if len(result.Packages) > 0 {
-		fmt.Printf("📦 Installed Packages: %d\n", len(result.Packages))
-		fmt.Println()
-	}
-
-	// Custom Scripts
-	if len(result.CustomResults) > 0 {
-		fmt.Printf("🔧 Custom Script Results: %d\n", len(result.CustomResults))
-		for scriptName, scriptResult := range result.CustomResults {
-			fmt.Printf("   • %s\n", scriptName)
-			if scriptResultMap, ok := scriptResult.(map[string]interface{}); ok {
-				if exitCode, ok := scriptResultMap["exit_code"].(float64); ok {
-					if exitCode == 0 {
-						fmt.Println("     ✅ Success")
-					} else {
-						fmt.Printf("     ❌ Exit code: %.0f\n", exitCode)
-					}
-				}
-			}
-		}
-		fmt.Println()
-	}
-
-	// Errors
-	if len(result.ScanErrors) > 0 {
-		fmt.Println("⚠️  Scan Errors:")
-		for _, err := range result.ScanErrors {
-			fmt.Printf("   • %s\n", err)
-		}
-		fmt.Println()
-	}
-
-	fmt.Println(strings.Repeat("=", 60))
-	fmt.Println("✅ Scan complete")
-
-	return nil
+	return WriteOutput(formatted)
 }
 
 // initLogger creates a zap logger with the specified level

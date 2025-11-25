@@ -8,6 +8,10 @@ This guide provides a comprehensive reference for creating vulnerability detecti
 - [Template Structure](#template-structure)
   - [Metadata (`info`)](#metadata-info)
   - [Detection Logic (`detection`)](#detection-logic-detection)
+- [Detection Strategy Selection](#detection-strategy-selection)
+  - [Module Comparison](#module-comparison)
+  - [Critical Warning: version_cmd Limitations](#critical-warning-version_cmd-limitations)
+  - [Decision Tree for CVE Detection](#decision-tree-for-cve-detection)
 - [Detection Modules](#detection-modules)
   - [File Hash Validator (`file_hash`)](#file-hash-validator-file_hash)
   - [File Content Pattern Matcher (`file_content`)](#file-content-pattern-matcher-file_content)
@@ -74,6 +78,82 @@ Each step in the `steps` list requires:
 - **`config`**: Module-specific configuration map.
 - **`platforms`** (optional): List of supported OSs (`linux`, `darwin`, `windows`). If omitted, runs on all.
 - **`weight`** (optional): Float (0.0-1.0) indicating the step's importance (default 1.0).
+
+## Detection Strategy Selection
+
+Before choosing a detection module, understand what each module does and its limitations.
+
+### Module Comparison
+
+| Module         | What It Does                          | Best For                                           | Critical Limitation                                 |
+| -------------- | ------------------------------------- | -------------------------------------------------- | --------------------------------------------------- |
+| `file_hash`    | Compares file hash against known hash | Detecting specific vulnerable binary builds        | Requires pre-computed hashes of vulnerable files    |
+| `file_content` | Matches regex pattern in file content | Misconfigurations, presence of vulnerable patterns | Pattern complexity, file must exist                 |
+| `version_cmd`  | Extracts version string via command   | Detecting software presence, version extraction    | **Does NOT compare versions** - matches ANY version |
+
+### Critical Warning: version_cmd Limitations
+
+> **⚠️ WARNING**: The `version_cmd` module extracts a version string but **does not compare it against a vulnerable range**. If you use `version_cmd` with a CVE that affects "versions 1.0 through 2.5", the template will match ALL installations of that software, including patched versions.
+
+**version_cmd is appropriate when:**
+
+- You need to detect if software is installed (presence check)
+- Version comparison is handled by the Sirius backend after extraction
+- You're detecting ANY version of software (not version-specific)
+
+**version_cmd is NOT appropriate when:**
+
+- You need to detect only specific vulnerable versions
+- False positives on patched systems would be problematic
+
+### Decision Tree for CVE Detection
+
+```
+Is this a version-range CVE? (e.g., "versions 1.0-2.5 vulnerable")
+│
+├─ YES: Can you obtain file hashes of vulnerable binaries?
+│       │
+│       ├─ YES → Use file_hash (most precise)
+│       │
+│       └─ NO → Use version_cmd BUT:
+│               - Document that version comparison is NOT done in template
+│               - Accept that ALL versions will be flagged
+│               - Version filtering happens in Sirius backend
+│
+└─ NO: Is this a configuration issue?
+        │
+        ├─ YES → Use file_content with specific pattern
+        │
+        └─ NO → Use appropriate module for detection type
+```
+
+### Recommended Approach for CVEs
+
+For CVEs affecting specific version ranges, the **recommended approach** is:
+
+1. **Primary**: Use `file_hash` with hashes of known vulnerable binaries
+2. **Fallback**: Use `version_cmd` with `logic: any` to provide multiple detection paths
+3. **Document**: Always note in the template description which versions are affected
+
+**Example combining approaches:**
+
+```yaml
+detection:
+  logic: any # Match if ANY step succeeds
+  steps:
+    # Primary: Hash of known vulnerable binary
+    - type: file_hash
+      config:
+        path: /usr/lib/libc.so
+        hash: abc123... # Hash of vulnerable version
+    # Fallback: Version extraction (note: matches ANY version)
+    - type: version_cmd
+      config:
+        command: ["/lib/ld-musl-x86_64.so.1"]
+        regex: "Version ([0-9.]+)"
+```
+
+---
 
 ## Detection Modules
 

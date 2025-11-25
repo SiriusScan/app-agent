@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -39,7 +40,7 @@ Examples:
 			moduleTypes := registry.List()
 
 			if len(moduleTypes) == 0 {
-				if format == "text" {
+				if format == "text" || format == "table" {
 					fmt.Println("No modules registered")
 				}
 				return nil
@@ -48,7 +49,7 @@ Examples:
 			// Sort for consistent output
 			sort.Strings(moduleTypes)
 
-			if format == "text" {
+			if format == "text" || format == "table" {
 				return outputModuleListText(moduleTypes)
 			}
 
@@ -84,12 +85,12 @@ Examples:
 				return fmt.Errorf("module '%s' not found", moduleType)
 			}
 
-			if format == "text" {
+			if format == "text" || format == "table" {
 				return outputModuleInfoText(descriptor)
 			}
 
 			// JSON output
-			return outputJSON(descriptor)
+			return outputModuleJSON(descriptor)
 		},
 	}
 }
@@ -142,7 +143,7 @@ func outputModuleListJSON(moduleTypes []string) error {
 		})
 	}
 
-	return outputJSON(modules)
+	return outputModuleJSON(modules)
 }
 
 func outputModuleInfoText(descriptor *modules.Descriptor) error {
@@ -180,3 +181,19 @@ func outputModuleInfoText(descriptor *modules.Descriptor) error {
 	return nil
 }
 
+// outputModuleJSON outputs data as JSON
+func outputModuleJSON(data interface{}) error {
+	writer, err := getOutputWriter()
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if writer != nil {
+			writer.Close()
+		}
+	}()
+
+	encoder := json.NewEncoder(writer)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(data)
+}

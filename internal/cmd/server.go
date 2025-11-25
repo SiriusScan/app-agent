@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -96,6 +97,20 @@ Examples:
 					template.SetGlobalSyncManager(syncManager)
 
 					logger.Info("Template synchronization initialized successfully")
+
+					// Trigger initial template sync from server on startup
+					// This runs in a goroutine to not block the agent startup
+					go func() {
+						syncCtx, syncCancel := context.WithTimeout(ctx, 2*time.Minute)
+						defer syncCancel()
+
+						logger.Info("Requesting initial template sync from server")
+						if err := syncManager.SyncFromServer(syncCtx); err != nil {
+							logger.Warn("Initial template sync failed (will retry on next sync)", zap.Error(err))
+						} else {
+							logger.Info("Initial template sync request sent successfully")
+						}
+					}()
 				} else {
 					logger.Warn("Sync manager not available from repository integration")
 				}
