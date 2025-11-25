@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
@@ -249,28 +250,32 @@ func (g *GitHubSyncManager) processTemplate(ctx context.Context, templatePath st
 
 // parseTemplate parses template content and creates a types.Template
 func (g *GitHubSyncManager) parseTemplate(content []byte, entry *TemplateManifestEntry) (*types.Template, error) {
-	// Note: created/updated times are not used in the current template structure
-
-	// Create template
-	template := &types.Template{
-		ID: entry.ID,
-		Info: types.TemplateInfo{
-			Name:     entry.ID, // Use ID as name
-			Author:   entry.Author,
-			Severity: types.Severity(entry.Severity),
-			Version:  entry.Version,
-			CVE:      entry.VulnerabilityIDs,
-		},
-		Detection: types.DetectionConfig{
-			Steps: []types.DetectionStep{
-				{
-					Type: entry.DetectionType,
-				},
-			},
-		},
+	// Parse the actual YAML content
+	var template types.Template
+	if err := yaml.Unmarshal(content, &template); err != nil {
+		return nil, fmt.Errorf("failed to parse template YAML: %w", err)
 	}
 
-	return template, nil
+	// Override with manifest entry values if template values are missing
+	if template.ID == "" {
+		template.ID = entry.ID
+	}
+	if template.Info.Version == "" {
+		template.Info.Version = entry.Version
+	}
+	if template.Info.Author == "" {
+		template.Info.Author = entry.Author
+	}
+	if template.Info.Severity == "" {
+		template.Info.Severity = types.Severity(entry.Severity)
+	}
+
+	g.logger.Debug("Parsed template from YAML",
+		zap.String("id", template.ID),
+		zap.String("name", template.Info.Name),
+		zap.Int("steps", len(template.Detection.Steps)))
+
+	return &template, nil
 }
 
 // updateGlobalManifest updates the global template manifest
