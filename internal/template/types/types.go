@@ -59,6 +59,12 @@ type TemplateInfo struct {
 	// Severity indicates the severity level
 	Severity Severity `json:"severity" yaml:"severity"`
 
+	// VulnerabilityID is the identifier used in Sirius for this vulnerability.
+	// This becomes the VID in the vulnerability database.
+	// Patterns: CVE-XXXX-XXXXX (for CVEs), CWE-XXX (for weaknesses), SIRIUS-XXX (custom)
+	// If not specified, falls back to template ID.
+	VulnerabilityID string `json:"vulnerability_id,omitempty" yaml:"vulnerability_id,omitempty"`
+
 	// Risk Scoring Fields (all optional)
 	// Priority: RiskScore → CVSSVector → CVSSScore → Severity mapping
 
@@ -83,11 +89,17 @@ type TemplateInfo struct {
 	// CVE identifiers if applicable
 	CVE []string `json:"cve,omitempty" yaml:"cve,omitempty"`
 
+	// CWE identifiers for weakness categorization
+	CWE []string `json:"cwe,omitempty" yaml:"cwe,omitempty"`
+
 	// Tags for categorization
 	Tags []string `json:"tags,omitempty" yaml:"tags,omitempty"`
 
 	// Version is the template version
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+
+	// Remediation provides guidance on how to fix the vulnerability
+	Remediation string `json:"remediation,omitempty" yaml:"remediation,omitempty"`
 }
 
 // DetectionConfig defines how detection is performed
@@ -123,6 +135,13 @@ type Result struct {
 	// TemplateName is the name of the template
 	TemplateName string `json:"template_name,omitempty"`
 
+	// VulnerabilityID is the identifier to use in Sirius (VID).
+	// Falls back to TemplateID if not specified in template.
+	VulnerabilityID string `json:"vulnerability_id,omitempty"`
+
+	// Description is the vulnerability description from the template
+	Description string `json:"description,omitempty"`
+
 	// Severity is the template's severity level
 	Severity Severity `json:"severity,omitempty"`
 
@@ -132,6 +151,21 @@ type Result struct {
 
 	// CVSSVector is the CVSS vector string if provided in template
 	CVSSVector string `json:"cvss_vector,omitempty"`
+
+	// CVE contains CVE identifiers from the template
+	CVE []string `json:"cve,omitempty"`
+
+	// CWE contains CWE identifiers from the template
+	CWE []string `json:"cwe,omitempty"`
+
+	// References contains URLs to related information
+	References []string `json:"references,omitempty"`
+
+	// Tags for categorization
+	Tags []string `json:"tags,omitempty"`
+
+	// Remediation guidance from the template
+	Remediation string `json:"remediation,omitempty"`
 
 	// Matched indicates whether the template matched (vulnerability detected)
 	Matched bool `json:"matched"`

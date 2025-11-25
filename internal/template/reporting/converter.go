@@ -18,14 +18,62 @@ func ConvertTemplateResultsToVulnerabilities(results []*types.Result) []sirius.V
 			continue // Skip unmatched templates
 		}
 
+		// Use VulnerabilityID from result (already resolved by executor)
+		// Falls back to TemplateID if VulnerabilityID is empty
+		vid := result.VulnerabilityID
+		if vid == "" {
+			vid = result.TemplateID
+		}
+
+		// Use template description if available, otherwise fall back to name
+		description := result.Description
+		if description == "" {
+			description = result.TemplateName
+		}
+
+		// Determine CVE ID (first CVE if any)
+		cveID := ""
+		if len(result.CVE) > 0 {
+			cveID = result.CVE[0]
+		}
+
+		// Determine category from CWE or tags
+		category := ""
+		if len(result.CWE) > 0 {
+			category = result.CWE[0]
+		} else if len(result.Tags) > 0 {
+			category = result.Tags[0]
+		}
+
+		// Build metadata with template tracking info
+		metadata := map[string]interface{}{
+			"template_id": result.TemplateID,
+			"confidence":  result.Confidence,
+		}
+		if len(result.CVE) > 1 {
+			metadata["additional_cves"] = result.CVE[1:]
+		}
+		if len(result.CWE) > 0 {
+			metadata["cwe"] = result.CWE
+		}
+		if len(result.References) > 0 {
+			metadata["references"] = result.References
+		}
+
 		vuln := sirius.Vulnerability{
-			VID:         result.TemplateID,       // Use template ID as vulnerability ID
+			VID:         vid,                     // Use resolved vulnerability ID
 			Title:       result.TemplateName,     // Template name as title
-			Description: result.TemplateName,     // Use name as description (fallback)
+			Description: description,             // Use template description
 			RiskScore:   result.RiskScore,        // Use calculated risk score from result
-			Severity:    string(result.Severity), // Include severity string
+			CVEID:       cveID,                   // Primary CVE ID if available
 			CVSSScore:   result.RiskScore,        // Also populate CVSSScore field
 			CVSSVector:  result.CVSSVector,       // Include CVSS vector if available
+			Severity:    string(result.Severity), // Include severity string
+			Remediation: result.Remediation,      // Include remediation guidance
+			Category:    category,                // Category from CWE or tags
+			Tags:        result.Tags,             // Include all tags
+			Confidence:  result.Confidence,       // Detection confidence
+			Metadata:    metadata,                // Additional metadata
 		}
 
 		vulnerabilities = append(vulnerabilities, vuln)
@@ -66,13 +114,19 @@ func BuildAgentMetadata(results []*types.Result, executionTime time.Duration) ma
 			matchedCount++
 		}
 
+		// Use VulnerabilityID from result, fallback to TemplateID
+		vid := result.VulnerabilityID
+		if vid == "" {
+			vid = result.TemplateID
+		}
+
 		tr := map[string]interface{}{
-			"template_id":      result.TemplateID,
-			"vulnerability_id": result.TemplateID, // Same as VID in vulnerabilities
+			"template_id":      result.TemplateID, // Detection rule identifier
+			"vulnerability_id": vid,               // VID used in Sirius (CVE/CWE/SIRIUS-XXX)
 			"vulnerable":       result.Matched,
 			"confidence":       result.Confidence,
 			"severity":         string(result.Severity),
-			"risk_score":       result.RiskScore, // Include calculated risk score
+			"risk_score":       result.RiskScore,
 		}
 
 		// Include CVSS vector if available
@@ -80,11 +134,19 @@ func BuildAgentMetadata(results []*types.Result, executionTime time.Duration) ma
 			tr["cvss_vector"] = result.CVSSVector
 		}
 
+		// Include CVE/CWE references if available
+		if len(result.CVE) > 0 {
+			tr["cve"] = result.CVE
+		}
+		if len(result.CWE) > 0 {
+			tr["cwe"] = result.CWE
+		}
+
 		templateResults = append(templateResults, tr)
 	}
 
 	return map[string]interface{}{
-		"agent_version":    "1.0.0-template-mvp",
+		"agent_version":    "1.0.0",
 		"scan_duration":    int64(executionTime.Milliseconds()),
 		"template_results": templateResults,
 		"template_count":   len(results),

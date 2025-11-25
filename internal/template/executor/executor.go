@@ -78,19 +78,37 @@ func (e *Executor) ExecuteTemplate(ctx context.Context, template *types.Template
 	// Calculate risk score using priority system
 	riskScore, _ := risk.CalculateRiskScore(template.Info)
 
+	// Determine vulnerability ID (VID for Sirius)
+	// Priority: VulnerabilityID field → first CVE → first CWE → Template ID
+	vulnerabilityID := template.ID
+	if template.Info.VulnerabilityID != "" {
+		vulnerabilityID = template.Info.VulnerabilityID
+	} else if len(template.Info.CVE) > 0 {
+		vulnerabilityID = template.Info.CVE[0]
+	} else if len(template.Info.CWE) > 0 {
+		vulnerabilityID = template.Info.CWE[0]
+	}
+
 	// Build final result
 	result := &types.Result{
-		TemplateID:   template.ID,
-		TemplateName: template.Info.Name,
-		Severity:     template.Info.Severity,
-		RiskScore:    riskScore,
-		CVSSVector:   template.Info.CVSSVector,
-		Matched:      matched,
-		Confidence:   confidence,
-		Steps:        stepResults,
-		Errors:       executionErrors,
-		Timestamp:    time.Now(),
-		Host:         hostname,
+		TemplateID:      template.ID,
+		TemplateName:    template.Info.Name,
+		VulnerabilityID: vulnerabilityID,
+		Description:     template.Info.Description,
+		Severity:        template.Info.Severity,
+		RiskScore:       riskScore,
+		CVSSVector:      template.Info.CVSSVector,
+		CVE:             template.Info.CVE,
+		CWE:             template.Info.CWE,
+		References:      template.Info.References,
+		Tags:            template.Info.Tags,
+		Remediation:     template.Info.Remediation,
+		Matched:         matched,
+		Confidence:      confidence,
+		Steps:           stepResults,
+		Errors:          executionErrors,
+		Timestamp:       time.Now(),
+		Host:            hostname,
 	}
 
 	return result, nil
