@@ -1,0 +1,148 @@
+# GoReleaser configuration for Sirius Agent
+# Documentation: https://goreleaser.com
+
+version: 2
+
+project_name: sirius-agent
+
+before:
+  hooks:
+    - go mod tidy
+    - go generate ./...
+
+builds:
+  - id: sirius-agent
+    main: ./cmd/sirius-agent
+    binary: sirius-agent
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+    # Ignore unsupported combinations
+    ignore:
+      - goos: windows
+        goarch: arm64  # Windows ARM64 support is limited
+
+archives:
+  - id: default
+    name_template: >-
+      {{ .ProjectName }}_
+      {{- .Version }}_
+      {{- .Os }}_
+      {{- .Arch }}
+    files:
+      - README.md
+      - LICENSE*
+      - templates/builtin/*
+      - documentation/*.md
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - '^ci:'
+      - Merge pull request
+      - Merge branch
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\([[:word:]]+\))??!?:.+$'
+      order: 0
+    - title: Bug Fixes
+      regexp: '^.*?fix(\([[:word:]]+\))??!?:.+$'
+      order: 1
+    - title: Security
+      regexp: '^.*?sec(\([[:word:]]+\))??!?:.+$'
+      order: 2
+    - title: Other
+      order: 999
+
+release:
+  github:
+    owner: SiriusScan
+    name: app-agent
+  prerelease: auto
+  draft: false
+  name_template: "v{{.Version}}"
+  header: |
+    ## Sirius Agent v{{.Version}}
+    
+    Template-based vulnerability detection agent for the Sirius scanning platform.
+    
+    ### Installation
+    
+    Download the appropriate archive for your platform below, extract it, and add the binary to your PATH.
+    
+    **Linux (amd64)**
+    ```bash
+    curl -LO https://github.com/SiriusScan/app-agent/releases/download/v{{.Version}}/sirius-agent_{{.Version}}_linux_amd64.tar.gz
+    tar xzf sirius-agent_{{.Version}}_linux_amd64.tar.gz
+    sudo mv sirius-agent /usr/local/bin/
+    ```
+    
+    **macOS (Apple Silicon)**
+    ```bash
+    curl -LO https://github.com/SiriusScan/app-agent/releases/download/v{{.Version}}/sirius-agent_{{.Version}}_darwin_arm64.tar.gz
+    tar xzf sirius-agent_{{.Version}}_darwin_arm64.tar.gz
+    sudo mv sirius-agent /usr/local/bin/
+    ```
+    
+    **Windows (amd64)**
+    Download the `.zip` file below and extract `sirius-agent.exe` to a directory in your PATH.
+
+  footer: |
+    ---
+    
+    **Full Changelog**: https://github.com/SiriusScan/app-agent/compare/{{ .PreviousTag }}...{{ .Tag }}
+
+# Homebrew tap (commented out for future use)
+# brews:
+#   - name: sirius-agent
+#     repository:
+#       owner: SiriusScan
+#       name: homebrew-tap
+#     homepage: https://github.com/SiriusScan/app-agent
+#     description: Template-based vulnerability detection agent
+#     license: MIT
+#     install: |
+#       bin.install "sirius-agent"
+
+# Scoop manifest (commented out for future use)
+# scoops:
+#   - repository:
+#       owner: SiriusScan
+#       name: scoop-bucket
+#     homepage: https://github.com/SiriusScan/app-agent
+#     description: Template-based vulnerability detection agent
+#     license: MIT
+
+# Docker images (commented out for future use)
+# dockers:
+#   - image_templates:
+#       - "ghcr.io/siriusscan/sirius-agent:{{ .Tag }}"
+#       - "ghcr.io/siriusscan/sirius-agent:latest"
+#     dockerfile: Dockerfile
+#     build_flag_templates:
+#       - "--label=org.opencontainers.image.created={{.Date}}"
+#       - "--label=org.opencontainers.image.revision={{.FullCommit}}"
+#       - "--label=org.opencontainers.image.version={{.Version}}"

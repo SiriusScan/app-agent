@@ -17,7 +17,8 @@ import (
 	_ "github.com/SiriusScan/app-agent/internal/modules/versioncmd"
 )
 
-var version = "1.0.0-mvp"
+// version is set at build time via ldflags
+var version = "dev"
 
 func main() {
 	rootCmd := cmd.NewRootCommand(version)

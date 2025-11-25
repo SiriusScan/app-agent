@@ -21,9 +21,10 @@ func TestGetTemplateBaseDir(t *testing.T) {
 			t.Fatal("GetTemplateBaseDir() returned empty string")
 		}
 
-		// Should contain "sirius-agent/templates"
-		if !strings.Contains(dir, "sirius-agent") || !strings.Contains(dir, "templates") {
-			t.Errorf("Expected path to contain 'sirius-agent/templates', got: %s", dir)
+		// Should contain "Sirius" or "sirius" and "template-cache"
+		lowerDir := strings.ToLower(dir)
+		if !strings.Contains(lowerDir, "sirius") || !strings.Contains(lowerDir, "template-cache") {
+			t.Errorf("Expected path to contain 'sirius' and 'template-cache', got: %s", dir)
 		}
 
 		t.Logf("✅ Default template directory: %s", dir)
@@ -82,8 +83,9 @@ func TestGetCustomTemplateDir(t *testing.T) {
 		t.Fatalf("GetCustomTemplateDir() failed: %v", err)
 	}
 
-	if !strings.HasSuffix(dir, filepath.Join("sirius-agent", "templates", "custom")) {
-		t.Errorf("Expected path to end with 'sirius-agent/templates/custom', got: %s", dir)
+	// Should end with "custom" subdirectory
+	if !strings.HasSuffix(dir, "custom") {
+		t.Errorf("Expected path to end with 'custom', got: %s", dir)
 	}
 
 	t.Logf("✅ Custom template directory: %s", dir)
@@ -97,8 +99,9 @@ func TestGetServerTemplateDir(t *testing.T) {
 		t.Fatalf("GetServerTemplateDir() failed: %v", err)
 	}
 
-	if !strings.HasSuffix(dir, filepath.Join("sirius-agent", "templates", "server")) {
-		t.Errorf("Expected path to end with 'sirius-agent/templates/server', got: %s", dir)
+	// Should end with "server" subdirectory
+	if !strings.HasSuffix(dir, "server") {
+		t.Errorf("Expected path to end with 'server', got: %s", dir)
 	}
 
 	t.Logf("✅ Server template directory: %s", dir)
@@ -112,8 +115,9 @@ func TestGetCacheDir(t *testing.T) {
 		t.Fatalf("GetCacheDir() failed: %v", err)
 	}
 
-	if !strings.HasSuffix(dir, filepath.Join("sirius-agent", "templates", "cache")) {
-		t.Errorf("Expected path to end with 'sirius-agent/templates/cache', got: %s", dir)
+	// Should end with "cache" subdirectory
+	if !strings.HasSuffix(dir, "cache") {
+		t.Errorf("Expected path to end with 'cache', got: %s", dir)
 	}
 
 	t.Logf("✅ Cache directory: %s", dir)

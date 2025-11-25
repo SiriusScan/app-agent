@@ -9,6 +9,21 @@
 *.dylib
 /bin/
 
+# Built binaries (agent executables)
+/sirius-agent
+/agent
+/server
+/template-cli
+/test-agent
+/test-integration
+/test-discovery
+
+# GoReleaser output
+/dist/
+
+# Duplicate proto output directory (use /proto/ instead)
+/github.com/
+
 # Test binary, built with `go test -c`
 *.test
 

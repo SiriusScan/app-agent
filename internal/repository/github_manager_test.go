@@ -48,6 +48,12 @@ func TestGitHubRepositoryManager_GetRepositoryInfo(t *testing.T) {
 
 	manager.SetConfiguration(config)
 
+	// Initialize first to set up the local path
+	ctx := context.Background()
+	if err := manager.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize failed: %v", err)
+	}
+
 	info, err := manager.GetRepositoryInfo()
 	if err != nil {
 		t.Errorf("GetRepositoryInfo failed: %v", err)

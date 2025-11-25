@@ -1,72 +1,81 @@
+# Release workflow for Sirius Agent
+# Triggers on tag push (v*) or manual dispatch
+# Uses GoReleaser to build and publish multi-platform binaries
+
 name: Release
 
 on:
   push:
     tags:
-      - "v*"
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to release (e.g., v1.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
-  build-and-release:
+  release:
+    name: Build and Release
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.23"
+          go-version-file: 'go.mod'
           cache: true
 
-      - name: Configure Git for private modules
-        run: |
-          git config --global url."https://${{ secrets.GITHUB_TOKEN }}@github.com/".insteadOf "https://github.com/"
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set GOPRIVATE
-        run: echo "GOPRIVATE=github.com/SiriusScan/*" >> $GITHUB_ENV
-
-      - name: Install dependencies
-        run: go mod download
-
-      - name: Build binaries
+  # Verify release artifacts
+  verify:
+    name: Verify Release
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download release artifacts
         run: |
-          chmod +x scripts/build.sh
-          ./scripts/build.sh
+          # Get the tag name
+          TAG="${{ github.ref_name }}"
+          if [ -z "$TAG" ] || [ "$TAG" = "refs/heads/main" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          
+          echo "Verifying release: $TAG"
+          
+          # Download checksums
+          curl -sL "https://github.com/SiriusScan/app-agent/releases/download/${TAG}/checksums.txt" -o checksums.txt
+          
+          echo "Release checksums:"
+          cat checksums.txt
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          name: SiriusScan Agent ${{ github.ref_name }}
-          body: |
-            ## SiriusScan Agent Release ${{ github.ref_name }}
-
-            ### What's New
-            - Cross-platform agent builds for Linux, Windows, and macOS
-            - Improved command processing and scripting support
-            - Enhanced status reporting capabilities
-            - Apple Silicon (ARM64) support for macOS devices
-
-            ### Downloads
-            - **Linux (amd64)**: `sirius-agent-linux-amd64`
-            - **Windows (amd64)**: `sirius-agent-windows-amd64.exe`
-            - **macOS (ARM64 - Apple Silicon)**: `sirius-agent-darwin-arm64`
-
-            ### Installation
-            1. Download the appropriate binary for your platform
-            2. Make it executable (Linux/Mac): `chmod +x sirius-agent-*`
-            3. Configure your environment variables or config file
-            4. Run the agent: 
-               - Linux: `./sirius-agent-linux-amd64`
-               - Windows: `sirius-agent-windows-amd64.exe`
-               - macOS: `./sirius-agent-darwin-arm64`
-
-          files: |
-            bin/sirius-agent-linux-amd64
-            bin/sirius-agent-windows-amd64.exe
-            bin/sirius-agent-darwin-arm64
-          draft: false
-          prerelease: false
+      - name: Verify Linux amd64 binary
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [ -z "$TAG" ] || [ "$TAG" = "refs/heads/main" ]; then
+            TAG="${{ github.event.inputs.tag }}"
+          fi
+          
+          curl -sL "https://github.com/SiriusScan/app-agent/releases/download/${TAG}/sirius-agent_${TAG#v}_linux_amd64.tar.gz" -o sirius-agent.tar.gz
+          tar xzf sirius-agent.tar.gz
+          ./sirius-agent --help
+          echo "Linux amd64 binary verified successfully"
