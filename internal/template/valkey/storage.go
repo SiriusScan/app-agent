@@ -496,12 +496,13 @@ func (s *ValKeyTemplateStorage) ValidateTemplate(template *types.Template, conte
 	}
 
 	// Validate detection type
+	// NOTE: Types use underscores to match template YAML format (e.g., file_hash, not file-hash)
 	validTypes := map[string]bool{
-		"file-hash":    true,
-		"file-content": true,
-		"config-file":  true,
+		"file_hash":    true,
+		"file_content": true,
+		"config_file":  true,
 		"registry":     true,
-		"version-cmd":  true,
+		"version_cmd":  true,
 	}
 	detectionType := getDetectionType(template.Detection)
 	if !validTypes[detectionType] {

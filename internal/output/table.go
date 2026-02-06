@@ -337,3 +337,5 @@ func (f *TableFormatter) colorizedCount(count int) string {
 	return f.colorize(fmt.Sprintf("%d", count), color.Green)
 }
 
+
+

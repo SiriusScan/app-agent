@@ -53,3 +53,5 @@ func (f *BaseFormatter) SetTerminalWidth(width int) {
 	f.TerminalWidth = width
 }
 
+
+

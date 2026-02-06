@@ -194,3 +194,5 @@ type CustomResult struct {
 	Error      string `json:"error,omitempty"`
 }
 
+
+

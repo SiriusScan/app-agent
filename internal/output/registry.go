@@ -108,3 +108,5 @@ func GetOrAuto(format string) (Formatter, error) {
 	return GetByString(format)
 }
 
+
+
