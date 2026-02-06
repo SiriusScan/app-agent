@@ -126,37 +126,14 @@ func (tm *ServerTemplateManager) GetTemplatesForSync(ctx context.Context, lastSy
 	tm.logger.Info("Getting templates for sync", zap.Int64("last_sync", lastSync))
 
 	if tm.valkeyClient == nil {
-		tm.logger.Warn("ValKey client not initialized, returning empty sync")
-		return &pb.TemplateManifest{
-			Version:   "1.0.0",
-			Updated:   time.Now().Unix(),
-			Templates: make(map[string]*pb.TemplateMetadata),
-			Statistics: &pb.TemplateStatistics{
-				TotalTemplates:    0,
-				StandardTemplates: 0,
-				CustomTemplates:   0,
-			},
-		}, []*pb.TemplateUpdate{}, nil
+		tm.logger.Warn("ValKey client not initialized, cannot sync templates")
+		return nil, nil, fmt.Errorf("ValKey client not initialized; template sync unavailable")
 	}
 
-	// Get template manifest from ValKey
-	manifestKey := "template:manifest"
-	cmd := tm.valkeyClient.B().Get().Key(manifestKey).Build()
-	resp := tm.valkeyClient.Do(ctx, cmd)
-
-	if err := resp.Error(); err != nil {
-		tm.logger.Warn("Failed to get template manifest from ValKey", zap.Error(err))
-		return &pb.TemplateManifest{
-			Version:   "1.0.0",
-			Updated:   time.Now().Unix(),
-			Templates: make(map[string]*pb.TemplateMetadata),
-			Statistics: &pb.TemplateStatistics{
-				TotalTemplates:    0,
-				StandardTemplates: 0,
-				CustomTemplates:   0,
-			},
-		}, []*pb.TemplateUpdate{}, nil
-	}
+	// Enumerate templates directly from template:meta:* keys
+	// Note: We no longer gate on the template:manifest key existing,
+	// as that key is only written during GitHub sync and its absence
+	// should not prevent syncing templates that are already stored.
 
 	// Get list of all template metadata keys
 	keysCmd := tm.valkeyClient.B().Keys().Pattern("template:meta:*").Build()

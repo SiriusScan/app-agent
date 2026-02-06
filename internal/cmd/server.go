@@ -90,6 +90,9 @@ Examples:
 					// IMPORTANT: Set the gRPC stream reference so sync manager can communicate with server
 					syncManager.SetGRPCStream(a.GetStream())
 
+					// Use the agent's mutex-protected send to avoid concurrent stream.Send() races
+					syncManager.SetStreamSendFunc(a.StreamSend)
+
 					// Set sync manager on agent so it can handle template updates
 					a.SetSyncManager(syncManager)
 
@@ -98,9 +101,13 @@ Examples:
 
 					logger.Info("Template synchronization initialized successfully")
 
-					// Trigger initial template sync from server on startup
-					// This runs in a goroutine to not block the agent startup
+					// Trigger initial template sync from server on startup.
+					// Delayed slightly to let WaitForCommands start its receive loop
+					// and send the initial heartbeat first, avoiding concurrent Send() races.
 					go func() {
+						// Wait for the receive loop and initial heartbeat to complete
+						time.Sleep(3 * time.Second)
+
 						syncCtx, syncCancel := context.WithTimeout(ctx, 2*time.Minute)
 						defer syncCancel()
 

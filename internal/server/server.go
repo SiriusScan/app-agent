@@ -497,6 +497,31 @@ func (s *Server) handleTemplateSyncRequest(agentID string, syncReq *pb.TemplateS
 		s.logger.Error("Failed to get templates for sync",
 			zap.String("agent_id", agentID),
 			zap.Error(err))
+
+		// Send an empty manifest so the agent doesn't hang waiting for a response
+		errorManifest := &pb.ServerMessage{
+			Id:   fmt.Sprintf("template-manifest-error-%d", time.Now().Unix()),
+			Type: pb.MessageType_TEMPLATE_UPDATE,
+			Payload: &pb.ServerMessage_TemplateUpdate{
+				TemplateUpdate: &pb.TemplateUpdate{
+					Manifest: &pb.TemplateManifest{
+						Version:   "1.0.0",
+						Updated:   time.Now().Unix(),
+						Templates: make(map[string]*pb.TemplateMetadata),
+						Statistics: &pb.TemplateStatistics{
+							TotalTemplates:    0,
+							StandardTemplates: 0,
+							CustomTemplates:   0,
+						},
+					},
+				},
+			},
+		}
+		if sendErr := stream.Send(errorManifest); sendErr != nil {
+			s.logger.Error("Failed to send error manifest to agent",
+				zap.String("agent_id", agentID),
+				zap.Error(sendErr))
+		}
 		return
 	}
 

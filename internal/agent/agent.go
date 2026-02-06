@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -34,6 +35,7 @@ type Agent struct {
 	conn      *grpc.ClientConn
 	client    pb.HelloServiceClient
 	stream    pb.HelloService_ConnectStreamClient
+	streamMu  sync.Mutex         // Protects concurrent Send() calls on the stream
 	startTime time.Time          // Time the agent was initialized
 	agentInfo commands.AgentInfo // Dependencies to pass to commands
 
@@ -274,6 +276,14 @@ func (a *Agent) sendHeartbeat(ctx context.Context) error {
 		zap.Int64("timestamp", heartbeat.Timestamp),
 		zap.Float64("memory_usage_mb", heartbeat.MemoryUsage))
 
+	return a.StreamSend(msg)
+}
+
+// StreamSend sends a message on the gRPC stream with mutex protection.
+// gRPC stream Send() is not safe for concurrent calls from multiple goroutines.
+func (a *Agent) StreamSend(msg *pb.AgentMessage) error {
+	a.streamMu.Lock()
+	defer a.streamMu.Unlock()
 	return a.stream.Send(msg)
 }
 
@@ -362,7 +372,7 @@ func (a *Agent) sendCommandResult(ctx context.Context, originalCommand, output, 
 		},
 	}
 
-	if err := a.stream.Send(msg); err != nil {
+	if err := a.StreamSend(msg); err != nil {
 		a.logger.Error("Failed to send command result to server", zap.Error(err))
 		// Consider how to handle send failures - maybe retry?
 		return

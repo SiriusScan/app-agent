@@ -17,6 +17,10 @@ import (
 	pb "github.com/SiriusScan/app-agent/proto/hello"
 )
 
+// StreamSendFunc is a function that sends an AgentMessage on the gRPC stream.
+// This allows the sync manager to use the agent's mutex-protected send.
+type StreamSendFunc func(msg *pb.AgentMessage) error
+
 // AgentSyncManager manages template synchronization for agents
 type AgentSyncManager struct {
 	cacheDir  string
@@ -26,6 +30,9 @@ type AgentSyncManager struct {
 
 	// gRPC stream for communication with server
 	grpcStream pb.HelloService_ConnectStreamClient
+	// streamSendFunc is a mutex-protected send function provided by the agent.
+	// When set, it is used instead of grpcStream.Send() to avoid data races.
+	streamSendFunc StreamSendFunc
 }
 
 // CacheManifest represents the local cache manifest
@@ -85,12 +92,31 @@ func (asm *AgentSyncManager) SetGRPCStream(stream pb.HelloService_ConnectStreamC
 	asm.logger.Info("gRPC stream reference set for template sync manager")
 }
 
+// SetStreamSendFunc sets a mutex-protected send function for the gRPC stream.
+// When set, this is used instead of grpcStream.Send() to avoid concurrent send races.
+func (asm *AgentSyncManager) SetStreamSendFunc(fn StreamSendFunc) {
+	asm.streamSendFunc = fn
+	asm.logger.Info("Stream send function set for template sync manager")
+}
+
+// sendMessage sends an AgentMessage using the thread-safe send function if available,
+// falling back to the raw stream Send() otherwise.
+func (asm *AgentSyncManager) sendMessage(msg *pb.AgentMessage) error {
+	if asm.streamSendFunc != nil {
+		return asm.streamSendFunc(msg)
+	}
+	if asm.grpcStream == nil {
+		return fmt.Errorf("gRPC stream not set; cannot send message")
+	}
+	return asm.grpcStream.Send(msg)
+}
+
 // SyncFromServer sends a template sync request to the server via gRPC stream
 func (asm *AgentSyncManager) SyncFromServer(ctx context.Context) error {
 	asm.logger.Info("Starting template sync from server via gRPC",
 		zap.String("server_url", asm.serverURL))
 
-	if asm.grpcStream == nil {
+	if asm.grpcStream == nil && asm.streamSendFunc == nil {
 		return fmt.Errorf("gRPC stream not set; cannot sync templates")
 	}
 
@@ -111,7 +137,7 @@ func (asm *AgentSyncManager) SyncFromServer(ctx context.Context) error {
 		LastSync: localManifest.LastSync.Unix(),
 	}
 
-	// Send sync request via gRPC stream
+	// Send sync request via gRPC stream (uses mutex-protected send if available)
 	msg := &pb.AgentMessage{
 		AgentId: asm.agentID,
 		Type:    pb.MessageType_TEMPLATE_SYNC_REQUEST,
@@ -120,7 +146,7 @@ func (asm *AgentSyncManager) SyncFromServer(ctx context.Context) error {
 		},
 	}
 
-	if err := asm.grpcStream.Send(msg); err != nil {
+	if err := asm.sendMessage(msg); err != nil {
 		return fmt.Errorf("failed to send template sync request: %w", err)
 	}
 
