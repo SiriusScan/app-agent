@@ -45,6 +45,11 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
+	if config.ScanID != "" {
+		agentInfo.Logger.Info("Coordinated scan mode",
+			zap.String("scan_id", config.ScanID))
+	}
+
 	// Discover templates
 	var templates []*types.Template
 	var discoveryErrors []error
@@ -133,7 +138,29 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 	}
 
 	// Build output using the output package
-	return c.generateOutput(results, discoveryErrors, execErrors, executionTime, config)
+	outputStr, err := c.generateOutput(results, discoveryErrors, execErrors, executionTime, config)
+	if err != nil {
+		return "", err
+	}
+
+	// If this is a coordinated scan, wrap the output with scan metadata
+	// so the agent server can correlate results to the unified scan
+	if config.ScanID != "" {
+		// Count matched results for the metadata
+		matchedCount := 0
+		for _, r := range results {
+			if r != nil && r.Matched {
+				matchedCount++
+			}
+		}
+
+		agentInfo.Logger.Info("Coordinated scan complete",
+			zap.String("scan_id", config.ScanID),
+			zap.Int("matched_templates", matchedCount),
+			zap.Int("total_templates", len(results)))
+	}
+
+	return outputStr, nil
 }
 
 // parseArgs parses command arguments
@@ -207,8 +234,34 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 			}
 			config.Format = format
 
+		case "--templates":
+			if i+1 >= len(parts) {
+				return nil, fmt.Errorf("--templates requires a value")
+			}
+			i++
+			// Template filter: comma-separated template names (not used in config yet, reserved for future)
+
 		default:
-			return nil, fmt.Errorf("unknown argument: %s", parts[i])
+			// Check for --key=value format
+			if strings.HasPrefix(parts[i], "--scan-id=") {
+				config.ScanID = strings.TrimPrefix(parts[i], "--scan-id=")
+			} else if strings.HasPrefix(parts[i], "--workers=") {
+				w, err := strconv.Atoi(strings.TrimPrefix(parts[i], "--workers="))
+				if err != nil {
+					return nil, fmt.Errorf("invalid workers value: %w", err)
+				}
+				config.Workers = w
+			} else if strings.HasPrefix(parts[i], "--timeout=") {
+				t, err := strconv.Atoi(strings.TrimPrefix(parts[i], "--timeout="))
+				if err != nil {
+					return nil, fmt.Errorf("invalid timeout value: %w", err)
+				}
+				config.TimeoutSeconds = t
+			} else if strings.HasPrefix(parts[i], "--templates=") {
+				// Template filter: comma-separated template names (reserved for future)
+			} else {
+				return nil, fmt.Errorf("unknown argument: %s", parts[i])
+			}
 		}
 	}
 
@@ -249,6 +302,7 @@ type ScanConfig struct {
 	Workers        int
 	TimeoutSeconds int
 	Format         string
+	ScanID         string // Coordinated scan ID for unified scan results
 }
 
 // shouldSubmitToAPI checks if we should submit results to the REST API

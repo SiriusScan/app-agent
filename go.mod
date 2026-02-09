@@ -31,4 +31,4 @@ require (
 	gorm.io/gorm v1.25.12 // indirect
 )
 
-// replace github.com/SiriusScan/go-api => ../go-api
+replace github.com/SiriusScan/go-api => ../go-api

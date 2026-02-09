@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/SiriusScan/app-agent/internal/agent"
 	"github.com/SiriusScan/app-agent/internal/commands/template"
+	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/repository"
 )
@@ -40,11 +40,8 @@ Examples:
   sirius-agent server --address localhost:50051
   sirius-agent server --agent-id my-agent-123`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			// Initialize logger
-			logger, err := zap.NewDevelopment()
-			if err != nil {
-				return fmt.Errorf("failed to create logger: %w", err)
-			}
+			// Initialize LOG_LEVEL-aware logger
+			logger := config.NewLogger()
 			defer func() {
 				_ = logger.Sync()
 			}()

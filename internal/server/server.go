@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -20,8 +21,7 @@ import (
 	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/store"
 	pb "github.com/SiriusScan/app-agent/proto/hello"
-
-	// "github.com/SiriusScan/go-api/sirius/agent/models" // Commented out due to import error
+	goapistore "github.com/SiriusScan/go-api/sirius/store"
 	"github.com/SiriusScan/go-api/sirius/queue"
 	// "github.com/sirius-project/app-agent/internal/valkey" // Commented out due to import error
 )
@@ -258,13 +258,20 @@ func (s *Server) ConnectStream(stream pb.HelloService_ConnectStreamServer) error
 	s.agentsMutex.Lock()
 	s.agents[agentID] = stream
 	s.agentsMutex.Unlock()
+	s.syncConnectedAgentsToValKey()
 
-	// Cleanup when the function exits
+	// Cleanup when the function exits - only remove if THIS stream is still registered
 	defer func() {
 		s.agentsMutex.Lock()
-		delete(s.agents, agentID)
+		if s.agents[agentID] == stream {
+			delete(s.agents, agentID)
+			s.logger.Info("Agent disconnected from stream", zap.String("agent_id", agentID))
+		} else {
+			s.logger.Info("Agent stream replaced by newer connection, skipping cleanup",
+				zap.String("agent_id", agentID))
+		}
 		s.agentsMutex.Unlock()
-		s.logger.Info("Agent disconnected from stream", zap.String("agent_id", agentID))
+		s.syncConnectedAgentsToValKey()
 	}()
 
 	// Send welcome message - trigger initial status update/scan
@@ -325,6 +332,9 @@ func (s *Server) handleHeartbeat(agentID string, heartbeat *pb.HeartbeatMessage)
 		zap.Int64("timestamp", heartbeat.Timestamp),
 		zap.Float64("cpu_usage", heartbeat.CpuUsage),
 		zap.Float64("memory_usage", heartbeat.MemoryUsage))
+
+	// Refresh connected_agents key TTL on heartbeat
+	s.syncConnectedAgentsToValKey()
 }
 
 // handleCommandResult processes command result messages from agents
@@ -405,6 +415,14 @@ func (s *Server) handleCommandResult(agentID string, result *pb.CommandResult) {
 		zap.Int32("exit_code", result.ExitCode),
 		zap.Int64("execution_time", result.ExecutionTime))
 
+	// Check if this is a coordinated scan result (contains --scan-id)
+	if scanID := extractScanID(result.Command); scanID != "" {
+		s.logger.Info("Coordinated scan result detected, merging into currentScan",
+			zap.String("scan_id", scanID),
+			zap.String("agent_id", agentID))
+		go s.mergeAgentScanResults(agentID, scanID, result)
+	}
+
 	// Print to stdout
 	fmt.Printf("\n===== COMMAND EXECUTION RESULT =====\n")
 	fmt.Printf("Agent: %s\n", agentID)
@@ -421,21 +439,21 @@ func (s *Server) handleCommandResult(agentID string, result *pb.CommandResult) {
 	// Log to file
 	if s.logFile != nil {
 		timestamp := fmt.Sprintf("[%s] ", time.Now().Format(time.RFC3339))
-		header := fmt.Sprintf("\n===== COMMAND EXECUTION RESULT =====\n")
+		header := "\n===== COMMAND EXECUTION RESULT =====\n"
 		agentLine := fmt.Sprintf("Agent: %s\n", agentID)
 		commandLine := fmt.Sprintf("Command: %s\n", result.Command)
 		exitCodeLine := fmt.Sprintf("Exit Code: %d\n", result.ExitCode)
 		executionTimeLine := fmt.Sprintf("Execution Time: %dms\n", result.ExecutionTime)
-		separator := fmt.Sprintf("==================================\n\n")
+		separator := "==================================\n\n"
 		outputPrefix := "Output:\n"
 		output := result.Output
 
 		var errorSection string
 		if result.Error != "" {
-			errorSection = fmt.Sprintf("\nError:\n%s\n", result.Error)
+			errorSection = "\nError:\n" + result.Error + "\n"
 		}
 
-		footer := fmt.Sprintf("\n==================================\n")
+		footer := "\n==================================\n"
 
 		fmt.Fprintf(s.logFile, "%s%s%s%s%s%s%s%s%s%s%s%s",
 			timestamp, header, agentLine, commandLine, exitCodeLine, executionTimeLine,
@@ -916,6 +934,27 @@ func (s *Server) Stop() {
 	s.logger.Info("Server stopped")
 }
 
+// syncConnectedAgentsToValKey writes the current list of connected agent IDs to ValKey
+// so that the frontend can discover agents without going through RabbitMQ.
+func (s *Server) syncConnectedAgentsToValKey() {
+	if s.valkeyClient == nil {
+		return
+	}
+	s.agentsMutex.RLock()
+	agentIDs := make([]string, 0, len(s.agents))
+	for id := range s.agents {
+		agentIDs = append(agentIDs, id)
+	}
+	s.agentsMutex.RUnlock()
+
+	agentsJSON, _ := json.Marshal(agentIDs)
+	ctx := context.Background()
+	cmd := s.valkeyClient.B().Set().Key("connected_agents").Value(string(agentsJSON)).Ex(120 * time.Second).Build()
+	if err := s.valkeyClient.Do(ctx, cmd).Error(); err != nil {
+		s.logger.Warn("Failed to sync connected agents to ValKey", zap.Error(err))
+	}
+}
+
 // SendCommandToAgent sends a command to a specific agent
 func (s *Server) SendCommandToAgent(agentID, command string) error {
 	s.agentsMutex.RLock()
@@ -1010,6 +1049,611 @@ func (s *Server) ListPendingCommands() []*CommandStatus {
 		}
 	}
 	return pending
+}
+
+// extractScanID extracts the --scan-id value from a command string
+func extractScanID(command string) string {
+	parts := strings.Fields(command)
+	for _, part := range parts {
+		if strings.HasPrefix(part, "--scan-id=") {
+			return strings.TrimPrefix(part, "--scan-id=")
+		}
+	}
+	return ""
+}
+
+// AgentSubScanMetadata is the agent-specific metadata stored in SubScan.Metadata
+type AgentSubScanMetadata struct {
+	Mode             string             `json:"mode,omitempty"`
+	DispatchedAgents []string           `json:"dispatched_agents"`
+	AgentStatuses    []AgentStatusEntry `json:"agent_statuses"`
+}
+
+type AgentStatusEntry struct {
+	AgentID              string `json:"agent_id"`
+	Status               string `json:"status"`
+	StartedAt            string `json:"started_at,omitempty"`
+	CompletedAt          string `json:"completed_at,omitempty"`
+	HostsFound           int    `json:"hosts_found"`
+	VulnerabilitiesFound int    `json:"vulnerabilities_found"`
+	Error                string `json:"error,omitempty"`
+}
+
+// AgentScanOutputEntry represents the JSON output from an agent template scan
+type AgentScanOutputEntry struct {
+	Summary *AgentScanSummaryEntry `json:"summary,omitempty"`
+	Results []AgentTemplateResult  `json:"results,omitempty"`
+}
+
+// AgentScanSummaryEntry is the scan summary from agent output
+type AgentScanSummaryEntry struct {
+	TotalTemplates  int    `json:"total_templates"`
+	Matched         int    `json:"matched"`
+	NotMatched      int    `json:"not_matched"`
+	Errors          int    `json:"errors"`
+	ExecutionTimeMs int64  `json:"execution_time_ms"`
+	Host            string `json:"host,omitempty"`
+	PrimaryIP       string `json:"primary_ip,omitempty"`
+}
+
+// AgentTemplateResult is a single template result from agent output
+type AgentTemplateResult struct {
+	TemplateID      string   `json:"template_id"`
+	TemplateName    string   `json:"template_name,omitempty"`
+	VulnerabilityID string   `json:"vulnerability_id,omitempty"`
+	Description     string   `json:"description,omitempty"`
+	Severity        string   `json:"severity,omitempty"`
+	RiskScore       float64  `json:"risk_score"`
+	CVE             []string `json:"cve,omitempty"`
+	Matched         bool     `json:"matched"`
+	Host            string   `json:"host,omitempty"`
+	Errors          []string `json:"errors,omitempty"`
+}
+
+// resolveAgentHostIP determines the correct target IP for an agent that reported scan results.
+// It uses multiple strategies in priority order:
+//  1. Direct IP match: agent reported its own primary IP and it matches a scan target
+//  2. Match agentHostname against existing host entries (network scan may have already mapped hostname→IP)
+//  3. Check if agentID is itself one of the scan targets
+//  4. DNS-resolve the agentHostname and match against scan targets
+//  5. DNS-resolve the agentID (if different from hostname) and match against targets
+//  6. Pick the first scan target not yet claimed by another agent
+//  7. Fall back to agentID
+func (s *Server) resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP string, scanResult *goapistore.ScanResult) string {
+	// Strategy 1: Direct IP match — agent reported its own primary IP
+	if agentPrimaryIP != "" {
+		for _, target := range scanResult.Targets {
+			if target == agentPrimaryIP {
+				s.logger.Info("Matched agent primary IP directly to scan target",
+					zap.String("agent_id", agentID),
+					zap.String("primary_ip", agentPrimaryIP))
+				return agentPrimaryIP
+			}
+		}
+	}
+
+	// Strategy 2: Match hostname against existing host entries
+	if agentHostname != "" {
+		for _, h := range scanResult.Hosts {
+			if h.Hostname != "" && h.Hostname == agentHostname {
+				s.logger.Info("Matched agent to existing host by hostname",
+					zap.String("agent_id", agentID),
+					zap.String("hostname", agentHostname),
+					zap.String("matched_ip", h.IP))
+				return h.IP
+			}
+		}
+	}
+
+	// Strategy 3: Check if agentID is directly one of the targets
+	for _, target := range scanResult.Targets {
+		if target == agentID {
+			s.logger.Info("Agent ID matches a scan target directly",
+				zap.String("agent_id", agentID))
+			return agentID
+		}
+	}
+
+	// Strategy 4: DNS-resolve agentHostname and match against targets
+	if agentHostname != "" {
+		if ips, err := net.LookupHost(agentHostname); err == nil {
+			for _, ip := range ips {
+				for _, target := range scanResult.Targets {
+					if ip == target {
+						s.logger.Info("Resolved agent hostname to target IP via DNS",
+							zap.String("agent_id", agentID),
+							zap.String("hostname", agentHostname),
+							zap.String("resolved_ip", ip))
+						return ip
+					}
+				}
+			}
+		}
+	}
+
+	// Strategy 5: DNS-resolve agentID if it differs from hostname
+	if agentID != agentHostname && agentID != "" {
+		if ips, err := net.LookupHost(agentID); err == nil {
+			for _, ip := range ips {
+				for _, target := range scanResult.Targets {
+					if ip == target {
+						s.logger.Info("Resolved agent ID to target IP via DNS",
+							zap.String("agent_id", agentID),
+							zap.String("resolved_ip", ip))
+						return ip
+					}
+				}
+			}
+		}
+	}
+
+	// Strategy 6: Pick the first target not yet claimed by another agent source
+	claimedIPs := make(map[string]bool)
+	for _, h := range scanResult.Hosts {
+		for _, src := range h.Sources {
+			if src == "agent" {
+				claimedIPs[h.IP] = true
+				break
+			}
+		}
+	}
+	for _, target := range scanResult.Targets {
+		if !claimedIPs[target] {
+			s.logger.Warn("Could not resolve agent to specific target, using first unclaimed target",
+				zap.String("agent_id", agentID),
+				zap.String("hostname", agentHostname),
+				zap.String("primary_ip", agentPrimaryIP),
+				zap.String("target_ip", target))
+			return target
+		}
+	}
+
+	// Strategy 7: Last resort — use primary IP if available, otherwise agentID
+	if agentPrimaryIP != "" {
+		s.logger.Warn("Could not match agent to any target, using primary IP",
+			zap.String("agent_id", agentID),
+			zap.String("primary_ip", agentPrimaryIP))
+		return agentPrimaryIP
+	}
+	s.logger.Warn("Could not match agent to any target, using agentID as host IP",
+		zap.String("agent_id", agentID),
+		zap.String("hostname", agentHostname))
+	return agentID
+}
+
+// mergeAgentScanResults merges agent scan results into the unified currentScan ValKey key
+func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.CommandResult) {
+	if s.valkeyClient == nil {
+		s.logger.Warn("Cannot merge agent scan results: ValKey client not available")
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Parse the agent's scan output FIRST (before reading currentScan)
+	// The output is JSON from the template scan command
+	var agentOutput AgentScanOutputEntry
+	var matchedVulns []goapistore.VulnerabilitySummary
+	agentHostname := ""
+	agentPrimaryIP := ""
+
+	if result.Output != "" {
+		// Debug: log first 500 chars of agent output for verification
+		outputPreview := result.Output
+		if len(outputPreview) > 500 {
+			outputPreview = outputPreview[:500] + "...(truncated)"
+		}
+		s.logger.Info("Agent scan raw output preview",
+			zap.String("agent_id", agentID),
+			zap.String("scan_id", scanID),
+			zap.Int("output_length", len(result.Output)),
+			zap.String("output_preview", outputPreview))
+
+		if err := json.Unmarshal([]byte(result.Output), &agentOutput); err != nil {
+			s.logger.Warn("Failed to parse agent scan output as JSON, trying to extract embedded JSON",
+				zap.Error(err),
+				zap.Int("output_length", len(result.Output)))
+			// Output might be wrapped or have extra text; best effort
+		}
+
+		// Extract the agent's hostname and primary IP from summary
+		if agentOutput.Summary != nil {
+			if agentOutput.Summary.Host != "" {
+				agentHostname = agentOutput.Summary.Host
+			}
+			if agentOutput.Summary.PrimaryIP != "" {
+				agentPrimaryIP = agentOutput.Summary.PrimaryIP
+			}
+		}
+
+		// Convert matched template results to vulnerability entries
+		for _, tmplResult := range agentOutput.Results {
+			if !tmplResult.Matched {
+				continue
+			}
+
+			// Use the host from the result if available
+			if tmplResult.Host != "" && agentHostname == "" {
+				agentHostname = tmplResult.Host
+			}
+
+			vulnID := tmplResult.VulnerabilityID
+			if vulnID == "" {
+				vulnID = tmplResult.TemplateID
+			}
+
+			title := tmplResult.TemplateName
+			if title == "" {
+				title = tmplResult.TemplateID
+			}
+
+			severity := tmplResult.Severity
+			if severity == "" {
+				severity = "info"
+			}
+
+			vuln := goapistore.VulnerabilitySummary{
+				ID:          vulnID,
+				Severity:    severity,
+				Title:       title,
+				Description: tmplResult.Description,
+				CVSSScore:   tmplResult.RiskScore,
+				RiskScore:   tmplResult.RiskScore,
+				ScanSource:  "agent",
+				AgentID:     agentID,
+			}
+			matchedVulns = append(matchedVulns, vuln)
+		}
+
+		s.logger.Info("Parsed agent scan output",
+			zap.Int("total_results", len(agentOutput.Results)),
+			zap.Int("matched_vulns", len(matchedVulns)),
+			zap.String("agent_hostname", agentHostname))
+	}
+
+	// Read current scan state from ValKey
+	getCmd := s.valkeyClient.B().Get().Key("currentScan").Build()
+	resp := s.valkeyClient.Do(ctx, getCmd)
+
+	if resp.Error() != nil {
+		s.logger.Error("Failed to read currentScan from ValKey",
+			zap.Error(resp.Error()))
+		return
+	}
+
+	encoded, err := resp.ToString()
+	if err != nil {
+		s.logger.Error("Failed to convert currentScan to string",
+			zap.Error(err))
+		return
+	}
+
+	// The currentScan value is base64-encoded JSON
+	// We need to decode, modify, and re-encode
+	decodedBytes, decErr := base64Decode(encoded)
+	if decErr != nil {
+		s.logger.Error("Failed to decode currentScan base64",
+			zap.Error(decErr))
+		return
+	}
+
+	var scanResult goapistore.ScanResult
+	if err := json.Unmarshal(decodedBytes, &scanResult); err != nil {
+		s.logger.Error("Failed to unmarshal currentScan",
+			zap.Error(err))
+		return
+	}
+
+	// Only merge if scan IDs match
+	if scanResult.ID != scanID {
+		s.logger.Warn("Scan ID mismatch, skipping merge",
+			zap.String("current_scan_id", scanResult.ID),
+			zap.String("agent_scan_id", scanID))
+		return
+	}
+
+	// Update agent sub-scan status via sub_scans registry
+	if scanResult.SubScans == nil {
+		scanResult.SubScans = make(map[string]goapistore.SubScan)
+	}
+
+	// Get or create the agent sub-scan entry
+	agentSubScan, hasAgentSS := scanResult.SubScans["agent"]
+	if !hasAgentSS {
+		agentSubScan = goapistore.SubScan{
+			Type:    "agent",
+			Enabled: true,
+			Status:  "running",
+			Progress: goapistore.SubScanProgress{
+				Label: "agents",
+			},
+		}
+	}
+
+	// Parse existing agent metadata (or start fresh)
+	var agentMeta AgentSubScanMetadata
+	if agentSubScan.Metadata != nil {
+		_ = json.Unmarshal(agentSubScan.Metadata, &agentMeta)
+	}
+
+	// Ensure this agent is tracked in DispatchedAgents
+	agentFound := false
+	for _, id := range agentMeta.DispatchedAgents {
+		if id == agentID {
+			agentFound = true
+			break
+		}
+	}
+	if !agentFound {
+		agentMeta.DispatchedAgents = append(agentMeta.DispatchedAgents, agentID)
+	}
+
+	// Update or create agent status entry
+	statusFound := false
+	for i, as := range agentMeta.AgentStatuses {
+		if as.AgentID == agentID {
+			statusFound = true
+			now := time.Now().Format(time.RFC3339)
+			if result.ExitCode == 0 {
+				agentMeta.AgentStatuses[i].Status = "completed"
+				agentMeta.AgentStatuses[i].CompletedAt = now
+				agentMeta.AgentStatuses[i].HostsFound = 1
+				agentMeta.AgentStatuses[i].VulnerabilitiesFound = len(matchedVulns)
+			} else {
+				agentMeta.AgentStatuses[i].Status = "failed"
+				agentMeta.AgentStatuses[i].CompletedAt = now
+				agentMeta.AgentStatuses[i].Error = result.Error
+			}
+			break
+		}
+	}
+	if !statusFound {
+		now := time.Now().Format(time.RFC3339)
+		newStatus := AgentStatusEntry{AgentID: agentID, CompletedAt: now}
+		if result.ExitCode == 0 {
+			newStatus.Status = "completed"
+			newStatus.HostsFound = 1
+			newStatus.VulnerabilitiesFound = len(matchedVulns)
+		} else {
+			newStatus.Status = "failed"
+			newStatus.Error = result.Error
+		}
+		agentMeta.AgentStatuses = append(agentMeta.AgentStatuses, newStatus)
+	}
+
+	// Count completed agents and update progress
+	completed := 0
+	for _, as := range agentMeta.AgentStatuses {
+		if as.Status == "completed" || as.Status == "failed" {
+			completed++
+		}
+	}
+	totalAgents := len(agentMeta.DispatchedAgents)
+	agentSubScan.Progress.Completed = completed
+	agentSubScan.Progress.Total = totalAgents
+
+	// Update agent sub-scan status
+	if totalAgents > 0 && completed >= totalAgents {
+		agentSubScan.Status = "completed"
+	} else {
+		agentSubScan.Status = "running"
+	}
+
+	// Serialize metadata back
+	metaBytes, _ := json.Marshal(agentMeta)
+	agentSubScan.Metadata = metaBytes
+	scanResult.SubScans["agent"] = agentSubScan
+
+	// Determine overall scan completion: all enabled sub-scans must be done
+	allSubScansDone := true
+	for _, ss := range scanResult.SubScans {
+		if ss.Enabled && ss.Status != "completed" && ss.Status != "failed" {
+			allSubScansDone = false
+			break
+		}
+	}
+	if allSubScansDone && len(scanResult.SubScans) > 0 {
+		scanResult.Status = "completed"
+		if scanResult.EndTime == "" {
+			scanResult.EndTime = time.Now().Format(time.RFC3339)
+		}
+		s.logger.Info("All sub-scans completed, marking overall scan as completed",
+			zap.String("scan_id", scanID))
+	}
+
+	// Resolve the correct target IP for this specific agent
+	hostIP := s.resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP, &scanResult)
+
+	// Merge host: look up by IP, create or update
+	hostIdx := -1
+	for i, h := range scanResult.Hosts {
+		if h.IP == hostIP {
+			hostIdx = i
+			break
+		}
+	}
+	if hostIdx >= 0 {
+		// Merge: add hostname and source
+		h := &scanResult.Hosts[hostIdx]
+		if agentHostname != "" && h.Hostname == "" {
+			h.Hostname = agentHostname
+		}
+		sourceFound := false
+		for _, src := range h.Sources {
+			if src == "agent" {
+				sourceFound = true
+				break
+			}
+		}
+		if !sourceFound {
+			h.Sources = append(h.Sources, "agent")
+		}
+	} else {
+		// New host
+		newHost := goapistore.HostEntry{
+			ID:       hostIP,
+			IP:       hostIP,
+			Hostname: agentHostname,
+			Sources:  []string{"agent"},
+		}
+		scanResult.Hosts = append(scanResult.Hosts, newHost)
+	}
+
+	// Append extracted vulnerabilities with host_id
+	if len(matchedVulns) > 0 {
+		for i := range matchedVulns {
+			matchedVulns[i].HostID = hostIP
+		}
+		scanResult.Vulnerabilities = append(scanResult.Vulnerabilities, matchedVulns...)
+		s.logger.Info("Added agent vulnerabilities to currentScan",
+			zap.Int("new_vulns", len(matchedVulns)),
+			zap.Int("total_vulns", len(scanResult.Vulnerabilities)))
+	}
+
+	// Write back to ValKey
+	updatedJSON, err := json.Marshal(scanResult)
+	if err != nil {
+		s.logger.Error("Failed to marshal updated currentScan",
+			zap.Error(err))
+		return
+	}
+
+	encodedStr := base64Encode(updatedJSON)
+	setCmd := s.valkeyClient.B().Set().Key("currentScan").Value(encodedStr).Build()
+	if err := s.valkeyClient.Do(ctx, setCmd).Error(); err != nil {
+		s.logger.Error("Failed to write updated currentScan to ValKey",
+			zap.Error(err))
+		return
+	}
+
+	// Also update the agent_scan:{scanID} status key
+	s.updateAgentScanStatus(ctx, scanID, agentID, result)
+
+	s.logger.Info("Successfully merged agent scan results into currentScan",
+		zap.String("scan_id", scanID),
+		zap.String("agent_id", agentID),
+		zap.Int("vulnerabilities_added", len(matchedVulns)),
+		zap.String("host_ip", hostIP))
+}
+
+// updateAgentScanStatus updates the agent_scan:{scanId} status key in ValKey
+func (s *Server) updateAgentScanStatus(ctx context.Context, scanID, agentID string, result *pb.CommandResult) {
+	statusKey := fmt.Sprintf("agent_scan:%s", scanID)
+
+	getCmd := s.valkeyClient.B().Get().Key(statusKey).Build()
+	resp := s.valkeyClient.Do(ctx, getCmd)
+
+	if resp.Error() != nil {
+		// Key doesn't exist yet (race condition: agent completed before frontend wrote the key)
+		// Create the status key with the agent's result
+		s.logger.Info("agent_scan status key not found, creating it",
+			zap.String("key", statusKey),
+			zap.String("agent_id", agentID))
+
+		agentStatus := "completed"
+		if result.ExitCode != 0 {
+			agentStatus = "failed"
+		}
+
+		newStatus := map[string]interface{}{
+			"scanId":         scanID,
+			"status":         agentStatus,
+			"totalAgents":    1,
+			"completedAgents": 1,
+			"failedAgents":   0,
+			"agentStatuses": []map[string]interface{}{
+				{
+					"agentId":              agentID,
+					"status":               agentStatus,
+					"hostsFound":           0,
+					"vulnerabilitiesFound": 0,
+				},
+			},
+			"completedAt": time.Now().Format(time.RFC3339),
+		}
+
+		statusBytes, _ := json.Marshal(newStatus)
+		setCmd := s.valkeyClient.B().Set().Key(statusKey).Value(string(statusBytes)).Ex(3600 * time.Second).Build()
+		if err := s.valkeyClient.Do(ctx, setCmd).Error(); err != nil {
+			s.logger.Error("Failed to create agent_scan status key", zap.Error(err))
+		}
+		return
+	}
+
+	statusStr, err := resp.ToString()
+	if err != nil {
+		s.logger.Warn("Could not convert agent_scan status to string",
+			zap.Error(err))
+		return
+	}
+
+	var status map[string]interface{}
+	if err := json.Unmarshal([]byte(statusStr), &status); err != nil {
+		s.logger.Warn("Could not parse agent_scan status",
+			zap.Error(err))
+		return
+	}
+
+	// Update agent status within the status object
+	if agentStatuses, ok := status["agentStatuses"].([]interface{}); ok {
+		for i, s := range agentStatuses {
+			if sm, ok := s.(map[string]interface{}); ok {
+				if sm["agentId"] == agentID {
+					if result.ExitCode == 0 {
+						sm["status"] = "completed"
+					} else {
+						sm["status"] = "failed"
+						sm["error"] = result.Error
+					}
+					agentStatuses[i] = sm
+					break
+				}
+			}
+		}
+	}
+
+	// Count completed
+	completedCount := 0
+	if agentStatuses, ok := status["agentStatuses"].([]interface{}); ok {
+		for _, s := range agentStatuses {
+			if sm, ok := s.(map[string]interface{}); ok {
+				st, _ := sm["status"].(string)
+				if st == "completed" || st == "failed" {
+					completedCount++
+				}
+			}
+		}
+	}
+	status["completedAgents"] = completedCount
+
+	totalAgents := 0
+	if ta, ok := status["totalAgents"].(float64); ok {
+		totalAgents = int(ta)
+	}
+
+	if completedCount >= totalAgents && totalAgents > 0 {
+		status["status"] = "completed"
+	}
+
+	updatedJSON, err := json.Marshal(status)
+	if err != nil {
+		return
+	}
+
+	// Write back with TTL
+	setCmd := s.valkeyClient.B().Set().Key(statusKey).Value(string(updatedJSON)).Ex(3600 * time.Second).Build()
+	s.valkeyClient.Do(ctx, setCmd)
+}
+
+// base64Decode decodes a base64-encoded string
+func base64Decode(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
+}
+
+// base64Encode encodes bytes to base64
+func base64Encode(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
 }
 
 // startTemplateSync is deprecated - now using repository-based sync via RabbitMQ

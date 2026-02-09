@@ -13,10 +13,10 @@ import (
 )
 
 func main() {
-	// Initialize logger
-	logger, _ := zap.NewDevelopment()
+	// Initialize LOG_LEVEL-aware logger
+	logger := config.NewLogger()
 	defer func() {
-		_ = logger.Sync() // Ignore error as recommended by zap docs for development logger
+		_ = logger.Sync()
 	}()
 
 	logger.Info("Starting gRPC Hello World Agent")

@@ -1,0 +1,30 @@
+id: CVE-2025-48384
+info:
+  name: Operator Investigation Template for OPENCODE-MANUAL-001
+  author: Agent Template Factory Operator Mode
+  severity: high
+  description: Operator-authored template for CVE-2025-48384
+  cve:
+    - CVE-2025-48384
+  cwe: []
+  version: 1.0.0
+  tags:
+    - operator
+    - investigation
+    - version_cmd
+  references:
+    - https://github.com/SiriusScan/Sirius
+detection:
+  logic: any
+  steps:
+    - type: version_cmd
+      platforms:
+        - darwin
+      weight: 1
+      config:
+        command:
+          - sh
+          - '-c'
+          - echo 'version 0.0.0'
+        regex: version\s+([0-9]+\.[0-9]+\.[0-9]+)
+        exit_code: 0

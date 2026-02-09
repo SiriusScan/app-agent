@@ -4,8 +4,10 @@
 package output
 
 import (
+	"os"
 	"time"
 
+	"github.com/SiriusScan/app-agent/internal/sysinfo"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
 
@@ -73,15 +75,22 @@ type ScanSummary struct {
 
 	// Host is the hostname where the scan was executed
 	Host string `json:"host,omitempty"`
+
+	// PrimaryIP is the agent's primary non-loopback IPv4 address
+	PrimaryIP string `json:"primary_ip,omitempty"`
 }
 
 // NewScanSummary creates a ScanSummary from scan results.
 func NewScanSummary(results []*types.Result, executionTime time.Duration, workers int) *ScanSummary {
+	hostname, _ := os.Hostname()
+
 	summary := &ScanSummary{
 		TotalTemplates:  len(results),
 		ExecutionTimeMs: executionTime.Milliseconds(),
 		Workers:         workers,
 		EndTime:         time.Now(),
+		Host:            hostname,
+		PrimaryIP:       sysinfo.GetPrimaryIP(),
 	}
 
 	for _, result := range results {
