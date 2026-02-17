@@ -59,6 +59,9 @@ message AgentMessage {
     CommandResult result = 4;
     TemplateSyncRequest sync_request = 5;
   }
+  // Authentication token presented by the agent on every message.
+  // Empty on the very first connection; populated after the server issues a token.
+  string auth_token = 6;
 }
 
 // ServerMessage is sent from the server to the agent
@@ -70,6 +73,9 @@ message ServerMessage {
     Acknowledgment acknowledgment = 4;
     TemplateUpdate template_update = 5;
   }
+  // Authentication token issued by the server on first connection.
+  // The agent must persist and return this token on subsequent connections.
+  string auth_token = 6;
 }
 
 // HeartbeatMessage contains agent status information

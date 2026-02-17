@@ -116,6 +116,9 @@ type Server struct {
 	repositoryManager  *RepositoryManager
 	syncQueueProcessor *TemplateSyncQueueProcessor
 	valkeyClient       valkey.Client
+
+	// KVStore for agent token authentication
+	kvStore goapistore.KVStore
 }
 
 // NewServer creates a new HelloService server
@@ -145,6 +148,13 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 		valkeyClient = nil
 	}
 
+	// Initialize go-api KVStore for agent token auth
+	kvStore, err := goapistore.NewValkeyStore()
+	if err != nil {
+		logger.Warn("Failed to create KVStore for agent auth, token auth will be unavailable",
+			zap.Error(err))
+	}
+
 	// Create server instance first
 	server := &Server{
 		logger:          logger,
@@ -155,6 +165,7 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 		responseStore:   responseStore,
 		valkeyClient:    valkeyClient,
 		pendingCommands: make(map[string]string),
+		kvStore:         kvStore,
 	}
 
 	// Initialize template manager with server reference
@@ -254,6 +265,41 @@ func (s *Server) ConnectStream(stream pb.HelloService_ConnectStreamServer) error
 	s.logger.Info("Agent connected to stream", zap.String("agent_id", agentID))
 	fmt.Printf("Agent connected to stream: %s\n", agentID)
 
+	// ── Agent token authentication ───────────────────────────────────────────
+	var issuedToken string
+	if s.kvStore != nil {
+		suppliedToken := msg.GetAuthToken()
+		if suppliedToken == "" {
+			// First connection — check if a token already exists for this agent.
+			if goapistore.HasAgentToken(context.Background(), s.kvStore, agentID) {
+				// Token exists but agent didn't supply it — reject.
+				s.logger.Warn("Agent connected without token but a token exists – rejecting",
+					zap.String("agent_id", agentID))
+				return fmt.Errorf("agent %s must present auth_token", agentID)
+			}
+			// Brand-new agent — generate and store a token.
+			newToken, err := goapistore.GenerateAgentToken()
+			if err != nil {
+				s.logger.Error("Failed to generate agent token", zap.Error(err))
+				return fmt.Errorf("failed to generate agent token: %w", err)
+			}
+			if err := goapistore.StoreAgentToken(context.Background(), s.kvStore, agentID, newToken); err != nil {
+				s.logger.Error("Failed to store agent token", zap.Error(err))
+				return fmt.Errorf("failed to store agent token: %w", err)
+			}
+			issuedToken = newToken
+			s.logger.Info("Issued new auth token to agent", zap.String("agent_id", agentID))
+		} else {
+			// Returning agent — validate the supplied token.
+			if _, err := goapistore.ValidateAgentToken(context.Background(), s.kvStore, agentID, suppliedToken); err != nil {
+				s.logger.Warn("Agent token validation failed",
+					zap.String("agent_id", agentID), zap.Error(err))
+				return fmt.Errorf("agent token validation failed: %w", err)
+			}
+			s.logger.Info("Agent authenticated successfully", zap.String("agent_id", agentID))
+		}
+	}
+
 	// Register the agent
 	s.agentsMutex.Lock()
 	s.agents[agentID] = stream
@@ -274,15 +320,17 @@ func (s *Server) ConnectStream(stream pb.HelloService_ConnectStreamServer) error
 		s.syncConnectedAgentsToValKey()
 	}()
 
-	// Send welcome message - trigger initial status update/scan
+	// Send welcome message - trigger initial status update/scan.
+	// If a token was issued, include it so the agent can persist it.
 	welcomeMsg := &pb.ServerMessage{
-		Id:   "welcome-status", // Changed ID slightly for clarity
+		Id:   "welcome-status",
 		Type: pb.MessageType_COMMAND,
 		Payload: &pb.ServerMessage_Command{
 			Command: &pb.CommandRequest{
-				Command: "internal:status", // Send status command on connect
+				Command: "internal:status",
 			},
 		},
+		AuthToken: issuedToken, // Non-empty only when a new token was generated.
 	}
 
 	if err := stream.Send(welcomeMsg); err != nil {
@@ -763,10 +811,50 @@ func (s *Server) sendErrorResponse(queueName string, errorMsg string) {
 	}
 }
 
+// agentAuthUnaryInterceptor validates that the calling agent has an active,
+// authenticated stream before allowing unary RPCs such as Ping.  If the
+// KVStore is unavailable, the interceptor falls back to only checking
+// that the agent has a registered stream (backward-compatible behaviour).
+func (s *Server) agentAuthUnaryInterceptor(
+	ctx context.Context,
+	req interface{},
+	info *grpc.UnaryServerInfo,
+	handler grpc.UnaryHandler,
+) (interface{}, error) {
+	// Only intercept HelloService methods; allow reflection etc. through.
+	if !strings.Contains(info.FullMethod, "HelloService") {
+		return handler(ctx, req)
+	}
+
+	// Extract agent_id from PingRequest (currently the only unary RPC).
+	type agentIDGetter interface{ GetAgentId() string }
+	getter, ok := req.(agentIDGetter)
+	if !ok {
+		return handler(ctx, req) // Unknown request type — let the handler decide.
+	}
+	agentID := getter.GetAgentId()
+	if agentID == "" {
+		return nil, fmt.Errorf("agent_id is required")
+	}
+
+	// Check that the agent has an active stream (implies they already passed
+	// stream-level token authentication).
+	s.agentsMutex.RLock()
+	_, connected := s.agents[agentID]
+	s.agentsMutex.RUnlock()
+	if !connected {
+		return nil, fmt.Errorf("agent %s has no active stream — authenticate via ConnectStream first", agentID)
+	}
+
+	return handler(ctx, req)
+}
+
 // Start starts the gRPC server and command processors
 func (s *Server) Start() error {
-	// Create a new gRPC server
-	s.server = grpc.NewServer()
+	// Create a new gRPC server with the auth interceptor
+	s.server = grpc.NewServer(
+		grpc.UnaryInterceptor(s.agentAuthUnaryInterceptor),
+	)
 	pb.RegisterHelloServiceServer(s.server, s)
 	reflection.Register(s.server)
 

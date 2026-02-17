@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/SiriusScan/go-api/sirius"
@@ -14,6 +16,14 @@ import (
 )
 
 const defaultTimeout = 15 * time.Second
+
+func serviceAPIKey() (string, error) {
+	key := strings.TrimSpace(os.Getenv("SIRIUS_API_KEY"))
+	if key == "" {
+		return "", fmt.Errorf("SIRIUS_API_KEY is required for agent API calls")
+	}
+	return key, nil
+}
 
 // UpdateHostRecord sends the host data to the backend API to create or update the host record.
 // It performs an HTTP POST request to the endpoint {apiBaseURL}/host.
@@ -40,6 +50,11 @@ func UpdateHostRecord(ctx context.Context, apiBaseURL string, hostData sirius.Ho
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "SiriusScanAgent/1.0") // Optional: identify the agent
+	key, err := serviceAPIKey()
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-Key", key)
 
 	// Execute the request
 	client := http.DefaultClient
@@ -113,6 +128,11 @@ func UpdateHostRecordWithEnhancedData(
 	// Set headers
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "SiriusScanAgent/1.0-MVP")
+	key, err := serviceAPIKey()
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-Key", key)
 
 	// Execute the request
 	client := http.DefaultClient

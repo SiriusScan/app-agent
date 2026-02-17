@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -21,6 +22,8 @@ type AgentConfig struct {
 	ApiBaseURL      string // Base URL for the backend REST API
 	PowerShellPath  string // Optional override path for PowerShell executable
 	EnableScripting bool   // Whether to enable PowerShell scripting
+	AuthToken       string // Persisted authentication token for gRPC auth
+	TokenFilePath   string // File path where the auth token is stored
 }
 
 // LoadServerConfig loads server configuration from environment variables
@@ -95,6 +98,28 @@ func LoadAgentConfig() *AgentConfig {
 		}
 	}
 
+	// Token file path — defaults to /data/.sirius-agent-token  (container-friendly)
+	// or ~/.sirius-agent-token if /data is not writable.
+	tokenFilePath := os.Getenv("AGENT_TOKEN_FILE")
+	if tokenFilePath == "" {
+		dataDir := "/data"
+		if info, err := os.Stat(dataDir); err == nil && info.IsDir() {
+			tokenFilePath = filepath.Join(dataDir, ".sirius-agent-token")
+		} else {
+			home, _ := os.UserHomeDir()
+			if home == "" {
+				home = "/tmp"
+			}
+			tokenFilePath = filepath.Join(home, ".sirius-agent-token")
+		}
+	}
+
+	// Load persisted auth token from file (if it exists).
+	authToken := os.Getenv("AGENT_AUTH_TOKEN")
+	if authToken == "" {
+		authToken = loadTokenFromFile(tokenFilePath)
+	}
+
 	return &AgentConfig{
 		ServerAddress:   serverAddr,
 		AgentID:         agentID,
@@ -102,5 +127,26 @@ func LoadAgentConfig() *AgentConfig {
 		ApiBaseURL:      apiURL,
 		PowerShellPath:  psPath,
 		EnableScripting: enableScripting,
+		AuthToken:       authToken,
+		TokenFilePath:   tokenFilePath,
 	}
+}
+
+// loadTokenFromFile reads a token from disk, returning "" on any error.
+func loadTokenFromFile(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// SaveAuthToken persists the auth token to the configured file.
+func (c *AgentConfig) SaveAuthToken(token string) error {
+	c.AuthToken = token
+	dir := filepath.Dir(c.TokenFilePath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create token dir: %w", err)
+	}
+	return os.WriteFile(c.TokenFilePath, []byte(token+"\n"), 0600)
 }

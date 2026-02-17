@@ -45,6 +45,9 @@ type Agent struct {
 
 	// Template sync manager
 	syncManager *templateagent.AgentSyncManager
+
+	// Auth token for gRPC authentication
+	authToken string
 }
 
 // NewAgent creates a new HelloService client (agent)
@@ -101,6 +104,7 @@ func NewAgent(cfg *config.AgentConfig, logger *zap.Logger) *Agent {
 		powerShellPath:   psPath,              // Store the found or configured path
 		scriptingEnabled: scriptingIsEnabled,
 		agentInfo:        agentInfo, // Store the AgentInfo struct
+		authToken:        cfg.AuthToken,       // Load persisted token (may be empty)
 	}
 }
 
@@ -184,11 +188,34 @@ func (a *Agent) WaitForCommands(ctx context.Context) error {
 
 	a.logger.Info("Starting to wait for commands on established stream")
 
-	// Send initial heartbeat (optional, could be done after receiving first server message)
-	if err := a.sendHeartbeat(ctx); err != nil {
-		a.logger.Warn("Failed to send initial heartbeat", zap.Error(err))
-		// Decide if this is fatal; for now, just log it.
+	// ── Send initial heartbeat with auth token ────────────────────────────
+	// The server expects the very first message to contain the agent_id
+	// and (optionally) the auth_token for authentication.
+	if err := a.sendAuthenticatedHeartbeat(ctx); err != nil {
+		return fmt.Errorf("failed to send initial authenticated heartbeat: %w", err)
 	}
+
+	// ── Receive and process the welcome message ───────────────────────────
+	// The server responds with a welcome/status command that may carry a
+	// newly-issued auth_token for brand-new agents.
+	welcomeMsg, err := a.stream.Recv()
+	if err != nil {
+		a.logger.Error("Error receiving welcome message from server", zap.Error(err))
+		return fmt.Errorf("error receiving welcome message: %w", err)
+	}
+
+	// Capture newly issued token (non-empty only when server generated one).
+	if newToken := welcomeMsg.GetAuthToken(); newToken != "" {
+		a.authToken = newToken
+		a.logger.Info("Received new auth token from server — persisting")
+		if err := a.config.SaveAuthToken(newToken); err != nil {
+			a.logger.Warn("Failed to persist auth token to file (will retry next connect)",
+				zap.Error(err))
+		}
+	}
+
+	// Process the welcome message content (usually an internal:status command).
+	a.processServerMessage(ctx, welcomeMsg)
 
 	// Start background heartbeat routine
 	heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
@@ -203,17 +230,7 @@ func (a *Agent) WaitForCommands(ctx context.Context) error {
 			return fmt.Errorf("error receiving message from server stream: %w", err)
 		}
 
-		// Process the message based on its type
-		switch msg.Type {
-		case pb.MessageType_COMMAND:
-			a.handleCommand(ctx, msg.GetCommand())
-		case pb.MessageType_ACKNOWLEDGMENT:
-			a.handleAcknowledgment(msg.GetAcknowledgment())
-		case pb.MessageType_TEMPLATE_UPDATE:
-			a.handleTemplateUpdate(ctx, msg.GetTemplateUpdate())
-		default:
-			a.logger.Warn("Received unknown message type", zap.Int32("type", int32(msg.Type)))
-		}
+		a.processServerMessage(ctx, msg)
 
 		// Check if context is done
 		select {
@@ -224,6 +241,52 @@ func (a *Agent) WaitForCommands(ctx context.Context) error {
 			// Continue processing
 		}
 	}
+}
+
+// processServerMessage dispatches a single ServerMessage to the appropriate handler.
+func (a *Agent) processServerMessage(ctx context.Context, msg *pb.ServerMessage) {
+	switch msg.Type {
+	case pb.MessageType_COMMAND:
+		a.handleCommand(ctx, msg.GetCommand())
+	case pb.MessageType_ACKNOWLEDGMENT:
+		a.handleAcknowledgment(msg.GetAcknowledgment())
+	case pb.MessageType_TEMPLATE_UPDATE:
+		a.handleTemplateUpdate(ctx, msg.GetTemplateUpdate())
+	default:
+		a.logger.Warn("Received unknown message type", zap.Int32("type", int32(msg.Type)))
+	}
+}
+
+// sendAuthenticatedHeartbeat sends the initial heartbeat including the auth
+// token so the server can authenticate (or provision) this agent.
+func (a *Agent) sendAuthenticatedHeartbeat(ctx context.Context) error {
+	if a.stream == nil {
+		return fmt.Errorf("no active stream")
+	}
+
+	var memStats runtime.MemStats
+	runtime.ReadMemStats(&memStats)
+
+	heartbeat := &pb.HeartbeatMessage{
+		Timestamp:   time.Now().Unix(),
+		CpuUsage:    0.0,
+		MemoryUsage: float64(memStats.Alloc) / 1024 / 1024,
+	}
+
+	msg := &pb.AgentMessage{
+		AgentId: a.config.AgentID,
+		Type:    pb.MessageType_HEARTBEAT,
+		Payload: &pb.AgentMessage_Heartbeat{
+			Heartbeat: heartbeat,
+		},
+		AuthToken: a.authToken, // Empty on first-ever connection; populated on reconnects.
+	}
+
+	a.logger.Info("Sending authenticated initial heartbeat",
+		zap.String("agent_id", a.config.AgentID),
+		zap.Bool("has_token", a.authToken != ""))
+
+	return a.StreamSend(msg)
 }
 
 // heartbeatRoutine sends periodic heartbeats to the server

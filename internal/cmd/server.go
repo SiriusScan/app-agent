@@ -13,7 +13,6 @@ import (
 	"github.com/SiriusScan/app-agent/internal/agent"
 	"github.com/SiriusScan/app-agent/internal/commands/template"
 	"github.com/SiriusScan/app-agent/internal/config"
-	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/repository"
 )
 
