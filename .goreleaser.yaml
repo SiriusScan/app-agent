@@ -109,6 +109,37 @@ release:
     **Windows (ARM64)**
     Download the `sirius-agent_{{.Version}}_windows_arm64.zip` file below and extract `sirius-agent.exe` to a directory in your PATH.
 
+    ### Execution
+
+    After installation, verify the binary is available:
+
+    ```bash
+    sirius-agent version
+    ```
+
+    **Server mode (default runtime mode)**
+    ```bash
+    # Uses SERVER_ADDRESS and AGENT_ID from environment (or defaults)
+    sirius-agent
+
+    # Explicit server mode with flags
+    sirius-agent server --address localhost:50051 --agent-id my-agent-01
+    ```
+
+    **Direct CLI mode (local testing)**
+    ```bash
+    # Local inventory scan
+    sirius-agent scan --format text
+
+    # Run a single template
+    sirius-agent template run ./templates/builtin/<template>.yaml
+
+    # List available modules
+    sirius-agent module list
+    ```
+
+    For full command details, see `documentation/AGENT-COMMANDS-REFERENCE.md` in this release archive.
+
   footer: |
     ---
     
