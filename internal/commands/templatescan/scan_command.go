@@ -10,6 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/SiriusScan/app-agent/internal/apiclient"
 	"github.com/SiriusScan/app-agent/internal/commands"
 	"github.com/SiriusScan/app-agent/internal/commands/scan" // For package enumeration
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register module
@@ -314,6 +315,14 @@ func shouldSubmitToAPI(agentInfo commands.AgentInfo, results []*types.Result) bo
 
 	// Don't submit if API base URL is not configured
 	if agentInfo.Config.ApiBaseURL == "" {
+		return false
+	}
+
+	// Don't submit if service API key is not configured
+	if !apiclient.ServiceAPIKeyConfigured() {
+		agentInfo.Logger.Warn("Skipping API submission: service API key is not configured",
+			zap.String("api_base_url", agentInfo.Config.ApiBaseURL),
+			zap.Strings("accepted_env_vars", apiclient.ServiceAPIKeyEnvNames()))
 		return false
 	}
 

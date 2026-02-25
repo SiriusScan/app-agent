@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/SiriusScan/app-agent/internal/agent"
+	"github.com/SiriusScan/app-agent/internal/apiclient"
 	"github.com/SiriusScan/app-agent/internal/commands/template"
 	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/repository"
@@ -61,6 +63,11 @@ Examples:
 			logger.Info("Configuration loaded",
 				zap.String("server_address", cfg.ServerAddress),
 				zap.String("agent_id", cfg.AgentID))
+			if !apiclient.ServiceAPIKeyConfigured() {
+				logger.Warn("Service API key is not configured; template-scan results cannot be submitted to Sirius API",
+					zap.String("api_base_url", cfg.ApiBaseURL),
+					zap.String("required_env_vars", strings.Join(apiclient.ServiceAPIKeyEnvNames(), ", ")))
+			}
 
 			// Create a context with cancellation
 			ctx, cancel := context.WithCancel(context.Background())

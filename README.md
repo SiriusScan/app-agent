@@ -148,6 +148,7 @@ See [documentation/README.template-architect-guide.md](documentation/README.temp
 | `AGENT_ID`           | Unique agent identifier                                                        | hostname                      |
 | `HOST_ID`            | Host record identifier                                                         | `AGENT_ID`                    |
 | `API_BASE_URL`       | Backend REST API URL                                                           | `http://<host>:9001`          |
+| `SIRIUS_API_KEY`     | Service API key used to submit scan results to Sirius API (`X-API-Key`)       | _(required for API submit)_   |
 | `POWERSHELL_PATH`    | PowerShell path override                                                       | auto-detect                   |
 | `ENABLE_SCRIPTING`   | Enable script execution                                                        | `true`                        |
 | `AGENT_AUTH_TOKEN`   | Persisted auth token value                                                     | empty                         |

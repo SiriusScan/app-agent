@@ -17,12 +17,36 @@ import (
 
 const defaultTimeout = 15 * time.Second
 
+var serviceAPIKeyEnvNames = []string{
+	"SIRIUS_API_KEY",
+	"SIRIUS_AGENT_API_KEY",
+	"API_KEY",
+}
+
 func serviceAPIKey() (string, error) {
-	key := strings.TrimSpace(os.Getenv("SIRIUS_API_KEY"))
-	if key == "" {
-		return "", fmt.Errorf("SIRIUS_API_KEY is required for agent API calls")
+	for _, envName := range serviceAPIKeyEnvNames {
+		key := strings.TrimSpace(os.Getenv(envName))
+		if key != "" {
+			return key, nil
+		}
 	}
-	return key, nil
+	return "", fmt.Errorf(
+		"service API key is required for agent API calls (set one of: %s)",
+		strings.Join(serviceAPIKeyEnvNames, ", "),
+	)
+}
+
+// ServiceAPIKeyConfigured reports whether a supported API key env var is set.
+func ServiceAPIKeyConfigured() bool {
+	_, err := serviceAPIKey()
+	return err == nil
+}
+
+// ServiceAPIKeyEnvNames returns a copy of accepted API key env var names.
+func ServiceAPIKeyEnvNames() []string {
+	names := make([]string, len(serviceAPIKeyEnvNames))
+	copy(names, serviceAPIKeyEnvNames)
+	return names
 }
 
 // UpdateHostRecord sends the host data to the backend API to create or update the host record.
