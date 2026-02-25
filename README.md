@@ -37,32 +37,40 @@ goreleaser build --snapshot --clean
 
 ## Quick Start
 
-### Standalone Mode
+### CLI Mode (Local Execution)
 
 Run a single template against the local system:
 
 ```bash
 # Run a specific template
-./sirius-agent scan --template templates/builtin/01-file-hash.yaml
+./sirius-agent template run ./templates/builtin/01-file-hash.yaml
+
+# Run all templates discovered by the template manager
+./sirius-agent template run-all
 
 # Run all templates in a directory
-./sirius-agent scan --template-dir templates/builtin/
+./sirius-agent template run-all ./templates/builtin/
 
 # List available templates
 ./sirius-agent template list
 ```
 
-### Server Mode
+### Server Mode (Default)
 
 Connect to a Sirius server for centralized management:
 
 ```bash
-# Set server configuration
-export SIRIUS_SERVER_ADDRESS=localhost:50051
-export SIRIUS_AGENT_ID=agent-001
+# 1) Verify binary
+./sirius-agent version
 
-# Start the agent
+# 2) Start with defaults (SERVER_ADDRESS defaults to localhost:50051)
 ./sirius-agent
+
+# 3) Optional: override via environment
+SERVER_ADDRESS=localhost:50051 AGENT_ID=agent-001 ./sirius-agent
+
+# 4) Optional: explicit server command
+./sirius-agent server --address localhost:50051 --agent-id agent-001
 ```
 
 ## Project Structure
@@ -71,8 +79,11 @@ export SIRIUS_AGENT_ID=agent-001
 .
 ├── cmd/
 │   ├── sirius-agent/      # Main agent binary
-│   ├── server/            # Development server
-│   └── template-cli/      # Template management CLI
+│   ├── agent/             # Legacy standalone entrypoint (deprecated)
+│   ├── server/            # Sirius Engine server binary
+│   ├── template-cli/      # Template management CLI tools
+│   ├── test-discovery/    # Template discovery test harness
+│   └── test-integration/  # Integration test harness
 ├── internal/
 │   ├── agent/             # Agent core logic
 │   ├── cmd/               # CLI command implementations
@@ -93,6 +104,10 @@ export SIRIUS_AGENT_ID=agent-001
 ├── testing/               # Integration test infrastructure
 └── documentation/         # Project documentation
 ```
+
+## Legacy Notice
+
+`cmd/agent` is kept for backward compatibility. The canonical runtime and release target is `cmd/sirius-agent`.
 
 ## Template Format
 
@@ -127,12 +142,19 @@ See [documentation/README.template-architect-guide.md](documentation/README.temp
 
 ## Configuration
 
-| Environment Variable    | Description              | Default               |
-| ----------------------- | ------------------------ | --------------------- |
-| `SIRIUS_SERVER_ADDRESS` | Server gRPC address      | `localhost:50051`     |
-| `SIRIUS_AGENT_ID`       | Unique agent identifier  | hostname              |
-| `SIRIUS_TEMPLATE_DIR`   | Local template directory | `~/.sirius/templates` |
-| `SIRIUS_LOG_LEVEL`      | Logging verbosity        | `info`                |
+| Environment Variable | Description                                                                    | Default                       |
+| -------------------- | ------------------------------------------------------------------------------ | ----------------------------- |
+| `SERVER_ADDRESS`     | Agent gRPC server address (agent mode) / server bind address (server process) | `localhost:50051` or `:50051` |
+| `AGENT_ID`           | Unique agent identifier                                                        | hostname                      |
+| `HOST_ID`            | Host record identifier                                                         | `AGENT_ID`                    |
+| `API_BASE_URL`       | Backend REST API URL                                                           | `http://<host>:9001`          |
+| `POWERSHELL_PATH`    | PowerShell path override                                                       | auto-detect                   |
+| `ENABLE_SCRIPTING`   | Enable script execution                                                        | `true`                        |
+| `AGENT_AUTH_TOKEN`   | Persisted auth token value                                                     | empty                         |
+| `AGENT_TOKEN_FILE`   | Token file location                                                            | `/data/.sirius-agent-token`*  |
+| `LOG_LEVEL`          | Logging verbosity                                                              | `info`                        |
+
+\* Falls back to `~/.sirius-agent-token` when `/data` is unavailable.
 
 ## Development
 

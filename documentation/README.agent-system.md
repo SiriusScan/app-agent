@@ -115,6 +115,8 @@ A lightweight, cross-platform binary that runs on target hosts. Responsible for:
 - Windows (amd64, arm64)
 - macOS (amd64, arm64)
 
+**Legacy entrypoint:** `cmd/agent` is retained for compatibility only and is not the canonical runtime target.
+
 ### 2. Sirius Engine (`cmd/server`)
 
 The centralized server component that:
@@ -771,10 +773,9 @@ Expected at `https://github.com/{org}/{repo}/main/repository-manifest.json`:
 
 #### Logging
 
-| Variable            | Description            | Default |
-| ------------------- | ---------------------- | ------- |
-| `SIRIUS_LOG_LEVEL`  | Log verbosity          | `info`  |
-| `SIRIUS_LOG_FORMAT` | Log format (text/json) | `text`  |
+| Variable    | Description   | Default |
+| ----------- | ------------- | ------- |
+| `LOG_LEVEL` | Log verbosity | `info`  |
 
 ### Agent Config Structure
 
@@ -786,6 +787,8 @@ type AgentConfig struct {
     ApiBaseURL      string // Backend API URL
     PowerShellPath  string // PowerShell executable path
     EnableScripting bool   // Enable script execution
+    AuthToken       string // Persisted auth token
+    TokenFilePath   string // Token persistence location
 }
 ```
 
@@ -799,7 +802,8 @@ type AgentConfig struct {
 app-agent/
 ├── cmd/
 │   ├── sirius-agent/          # Main agent binary entry point
-│   ├── server/                # Development server entry point
+│   ├── agent/                 # Legacy standalone entry point (deprecated)
+│   ├── server/                # Sirius Engine server entry point
 │   ├── template-cli/          # Template management CLI
 │   ├── test-discovery/        # Template discovery testing
 │   └── test-integration/      # Integration test runner

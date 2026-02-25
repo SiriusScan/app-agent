@@ -88,7 +88,7 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 					errMsg += fmt.Sprintf("\n  ... and %d more errors", len(discoveryErrors)-3)
 				}
 			}
-			return "", fmt.Errorf(errMsg)
+			return "", fmt.Errorf("%s", errMsg)
 		}
 
 	} else {

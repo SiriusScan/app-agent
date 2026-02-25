@@ -37,7 +37,7 @@ func GatherMacOSPackages(ctx context.Context, agentInfo commands.AgentInfo, resu
 		errMsg := fmt.Sprintf("brew list failed (Stderr: %s): %v", stderr.String(), err)
 		agentInfo.Logger.Error("Homebrew package gathering failed", zap.Error(err), zap.String("stderr", stderr.String()))
 		result.ScanErrors = append(result.ScanErrors, errMsg)
-		return nil, fmt.Errorf(errMsg)
+		return nil, fmt.Errorf("%s", errMsg)
 	}
 
 	packages := make([]InstalledPackage, 0)

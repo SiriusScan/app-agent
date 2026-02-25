@@ -18,7 +18,7 @@ func GatherWindowsPackages(ctx context.Context, agentInfo commands.AgentInfo, re
 		msg := "Scripting disabled or PowerShell not found, cannot gather Windows packages."
 		agentInfo.Logger.Warn(msg)
 		result.ScanErrors = append(result.ScanErrors, msg)
-		return nil, fmt.Errorf(msg)
+		return nil, fmt.Errorf("%s", msg)
 	}
 
 	agentInfo.Logger.Info("Gathering Windows packages via PowerShell registry query")
@@ -66,7 +66,7 @@ Write-Output $outputJson
 		errMsg := fmt.Sprintf("PowerShell script execution failed (ExitCode: %d): %v. Stderr: %s", exitCode, err, stderr)
 		agentInfo.Logger.Error("Windows package gathering failed", zap.Error(err), zap.Int("exitCode", exitCode), zap.String("stderr", stderr))
 		result.ScanErrors = append(result.ScanErrors, errMsg)
-		return nil, fmt.Errorf(errMsg)
+		return nil, fmt.Errorf("%s", errMsg)
 	}
 
 	// Trim whitespace from stdout before checking if empty

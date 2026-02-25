@@ -8,7 +8,7 @@ set -e
 VERSION="0.2"
 APP_NAME="sirius-agent"
 BUILD_DIR="bin"
-SOURCE_DIR="cmd/agent"
+SOURCE_DIR="cmd/sirius-agent"
 
 echo "🚀 Building SiriusScan Agent v${VERSION}"
 

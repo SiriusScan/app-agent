@@ -99,7 +99,7 @@ Examples:
 
 func outputModuleListText(moduleTypes []string) error {
 	fmt.Printf("📦 Registered Detection Modules\n")
-	fmt.Printf("=" + strings.Repeat("=", 50) + "\n\n")
+	fmt.Print("=" + strings.Repeat("=", 50) + "\n\n")
 
 	for i, moduleType := range moduleTypes {
 		descriptor := registry.GetDescriptor(moduleType)
@@ -117,7 +117,7 @@ func outputModuleListText(moduleTypes []string) error {
 		}
 	}
 
-	fmt.Printf("\n" + strings.Repeat("=", 52) + "\n")
+	fmt.Print("\n" + strings.Repeat("=", 52) + "\n")
 	fmt.Printf("Total: %d module(s)\n", len(moduleTypes))
 	fmt.Printf("\nUse 'sirius-agent module info <type>' for detailed information\n")
 
@@ -148,7 +148,7 @@ func outputModuleListJSON(moduleTypes []string) error {
 
 func outputModuleInfoText(descriptor *modules.Descriptor) error {
 	fmt.Printf("📦 Module Information: %s\n", descriptor.Type)
-	fmt.Printf("=" + strings.Repeat("=", 50) + "\n\n")
+	fmt.Print("=" + strings.Repeat("=", 50) + "\n\n")
 
 	fmt.Printf("Type: %s\n", descriptor.Type)
 	fmt.Printf("Name: %s\n", descriptor.Name)

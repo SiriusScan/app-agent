@@ -11,9 +11,9 @@ The Sirius Agent supports two operational modes:
 Run commands directly from the terminal without a server connection:
 
 ```bash
-sirius-agent scan --format text
 sirius-agent template run my-template.yaml
 sirius-agent module list
+sirius-agent version
 ```
 
 **Use Cases:**
@@ -37,7 +37,7 @@ The server will send commands using the internal command registry.
 
 The Sirius Agent uses a flexible command routing system that supports:
 
-- **CLI commands** (e.g., `sirius-agent scan`)
+- **CLI commands** (e.g., `sirius-agent template run`)
 - **Internal commands** (e.g., `internal:scan` via server)
 - **Short aliases** (e.g., `scan`, `tscan`)
 - **Longest prefix matching** for command resolution
@@ -78,30 +78,11 @@ help --json
 
 These commands are available in direct CLI mode. Run any command with `--help` to see detailed usage.
 
-### Scan Command
+### Notes on Scan Commands
 
-Perform system scanning and inventory collection.
+The scan-oriented aliases shown in this document (`scan`, `internal:scan`, `internal:template-scan`) are part of the internal command registry used in server mode.
 
-```bash
-# Basic package scan (default: JSON output)
-sirius-agent scan
-
-# Human-readable output
-sirius-agent scan --format text
-
-# Run custom detection scripts
-sirius-agent scan --scripts=check-suid.sh
-sirius-agent scan --scripts=script1.sh,script2.sh
-
-# List templates (shortcut)
-sirius-agent scan --list-templates
-
-# Save to file
-sirius-agent scan --output scan-results.json
-
-# Suppress logging
-sirius-agent scan --log-level error
-```
+Direct local CLI usage should prefer explicit Cobra command groups such as `template`, `module`, `server`, and `version`.
 
 ### Template Commands
 
@@ -146,6 +127,9 @@ Start agent in server mode for gRPC communication.
 ```bash
 # Connect to server (default: localhost:50051)
 sirius-agent server
+
+# Equivalent default mode when no subcommand is provided
+sirius-agent
 
 # Connect to custom server
 SERVER_ADDRESS=remote-server:50051 sirius-agent server

@@ -122,7 +122,7 @@ func (c *ScanCommand) gatherPlatformPackages(ctx context.Context, agentInfo comm
 	default:
 		msg := fmt.Sprintf("Package gathering not supported for OS: %s", runtime.GOOS)
 		result.ScanErrors = append(result.ScanErrors, msg)
-		return nil, fmt.Errorf(msg)
+		return nil, fmt.Errorf("%s", msg)
 	}
 }
 
