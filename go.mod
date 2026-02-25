@@ -5,7 +5,7 @@ go 1.24.0
 toolchain go1.24.1
 
 require (
-	github.com/SiriusScan/go-api v0.0.10
+	github.com/SiriusScan/go-api v0.0.16
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/spf13/cobra v1.10.1
 	github.com/valkey-io/valkey-go v1.0.60
@@ -30,5 +30,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20250414145226-207652e42e2e // indirect
 	gorm.io/gorm v1.25.12 // indirect
 )
-
-replace github.com/SiriusScan/go-api => ../go-api
