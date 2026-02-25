@@ -119,19 +119,22 @@ release:
 
     **Server mode (default runtime mode)**
     ```bash
-    # Uses SERVER_ADDRESS and AGENT_ID from environment (or defaults)
+    # Quick start: defaults to SERVER_ADDRESS=localhost:50051
     sirius-agent
 
-    # Explicit server mode with flags
+    # Optional: set explicit agent/server values
+    SERVER_ADDRESS=localhost:50051 AGENT_ID=my-agent-01 sirius-agent
+
+    # Optional: explicit subcommand form
     sirius-agent server --address localhost:50051 --agent-id my-agent-01
     ```
 
-    **Direct CLI mode (local testing)**
+    **Local CLI mode (no server)**
     ```bash
     # Local inventory scan
     sirius-agent scan --format text
 
-    # Run a single template
+    # Run a single template from this release archive
     sirius-agent template run ./templates/builtin/<template>.yaml
 
     # List available modules
