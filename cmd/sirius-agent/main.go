@@ -14,7 +14,7 @@ import (
 	_ "github.com/SiriusScan/app-agent/internal/commands/templatescan" // Register template scan command
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent"   // Register modules
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"
-	_ "github.com/SiriusScan/app-agent/internal/modules/telnetlinemode"
+	_ "github.com/SiriusScan/app-agent/internal/modules/filesearch"
 	_ "github.com/SiriusScan/app-agent/internal/modules/versioncmd"
 )
 

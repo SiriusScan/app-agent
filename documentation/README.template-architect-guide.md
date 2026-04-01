@@ -16,6 +16,7 @@ This guide provides a comprehensive reference for creating vulnerability detecti
   - [File Hash Validator (`file_hash`)](#file-hash-validator-file_hash)
   - [File Content Pattern Matcher (`file_content`)](#file-content-pattern-matcher-file_content)
   - [Command Version Extractor (`version_cmd`)](#command-version-extractor-version_cmd)
+  - [File Search (`file_search`)](#file-search-file_search)
 - [Risk Scoring & Severity](#risk-scoring--severity)
 - [Best Practices](#best-practices)
 - [Examples](#examples)
@@ -85,11 +86,12 @@ Before choosing a detection module, understand what each module does and its lim
 
 ### Module Comparison
 
-| Module         | What It Does                          | Best For                                           | Critical Limitation                                 |
-| -------------- | ------------------------------------- | -------------------------------------------------- | --------------------------------------------------- |
-| `file_hash`    | Compares file hash against known hash | Detecting specific vulnerable binary builds        | Requires pre-computed hashes of vulnerable files    |
-| `file_content` | Matches regex pattern in file content | Misconfigurations, presence of vulnerable patterns | Pattern complexity, file must exist                 |
-| `version_cmd`  | Extracts version string via command   | Detecting software presence, version extraction    | **Does NOT compare versions** - matches ANY version |
+| Module         | What It Does                                  | Best For                                           | Critical Limitation                                 |
+| -------------- | --------------------------------------------- | -------------------------------------------------- | --------------------------------------------------- |
+| `file_hash`    | Compares file hash against known hash         | Detecting specific vulnerable binary builds        | Requires pre-computed hashes of vulnerable files    |
+| `file_content` | Matches regex pattern in a single file        | Misconfigurations, presence of vulnerable patterns | Pattern complexity, file path must be known         |
+| `version_cmd`  | Extracts version string via command            | Detecting software presence, version extraction    | **Does NOT compare versions** - matches ANY version |
+| `file_search`  | Recursively searches directories for files    | Supply chain attacks, finding packages across disk | Filesystem scans can be slow on large trees         |
 
 ### Critical Warning: version_cmd Limitations
 
@@ -111,18 +113,30 @@ Before choosing a detection module, understand what each module does and its lim
 ```
 Is this a version-range CVE? (e.g., "versions 1.0-2.5 vulnerable")
 │
-├─ YES: Can you obtain file hashes of vulnerable binaries?
+├─ YES: Do you know the exact file path?
 │       │
-│       ├─ YES → Use file_hash (most precise)
+│       ├─ YES: Can you obtain file hashes of vulnerable binaries?
+│       │       │
+│       │       ├─ YES → Use file_hash (most precise)
+│       │       │
+│       │       └─ NO → Use file_content to match version in a known file
 │       │
-│       └─ NO → Use version_cmd BUT:
-│               - Document that version comparison is NOT done in template
-│               - Accept that ALL versions will be flagged
-│               - Version filtering happens in Sirius backend
+│       └─ NO: Is the file in an unknown location? (e.g., npm packages, app bundles)
+│               │
+│               ├─ YES → Use file_search with filename + path + content filters
+│               │
+│               └─ NO → Use version_cmd BUT:
+│                       - Document that version comparison is NOT done in template
+│                       - Accept that ALL versions will be flagged
+│                       - Version filtering happens in Sirius backend
 │
 └─ NO: Is this a configuration issue?
         │
-        ├─ YES → Use file_content with specific pattern
+        ├─ YES: Do you know the config file path?
+        │       │
+        │       ├─ YES → Use file_content with specific pattern
+        │       │
+        │       └─ NO → Use file_search to find config files across the filesystem
         │
         └─ NO → Use appropriate module for detection type
 ```
@@ -224,6 +238,71 @@ Executes a system command and extracts version information from stdout/stderr us
     exit_code: 0
 ```
 
+### File Search (`file_search`)
+
+Recursively walks a directory tree, matches files by name (glob) and path (regex), and optionally applies a content regex to each matched file. Returns structured evidence listing every match with path, matched text, and line number. Ideal for supply chain attacks, finding installed packages, and locating configuration files across unknown paths.
+
+**Configuration:**
+
+| Key                | Type     | Required | Description                                                                                                    |
+| ------------------ | -------- | -------- | -------------------------------------------------------------------------------------------------------------- |
+| `root_path`        | string   | Yes      | Starting directory for the search (e.g., `/`, `/home`, `.`).                                                   |
+| `filename_pattern` | string   | No*      | Glob pattern matched against filenames (e.g., `package.json`, `*.lock`).                                       |
+| `path_regex`       | string   | No*      | [Go regex](https://pkg.go.dev/regexp/syntax) matched against full file paths (e.g., `node_modules/axios/`).    |
+| `content_regex`    | string   | No*      | [Go regex](https://pkg.go.dev/regexp/syntax) applied to file content of files that pass filename/path filters. |
+| `max_depth`        | int      | No       | Maximum directory recursion depth. Default `20`.                                                               |
+| `max_results`      | int      | No       | Maximum matches to collect. Default `100`.                                                                     |
+| `exclude_dirs`     | []string | No       | Directory names to skip entirely. Default `[".git"]`.                                                          |
+
+\* At least one of `filename_pattern`, `path_regex`, or `content_regex` must be provided. All provided criteria are AND-ed: a file must pass every filter to count as a match.
+
+**Evidence output** includes:
+
+- `matches` — array of objects with `path`, `matched_text`, and `line_number`
+- `files_scanned` — number of files tested against content regex
+- `files_matched` — number of matching files collected
+- `truncated` — `true` if `max_results` was reached
+
+**Example — Detect compromised npm package:**
+
+```yaml
+- type: file_search
+  config:
+    root_path: /
+    filename_pattern: "package.json"
+    path_regex: "node_modules/axios/package\\.json$"
+    content_regex: '"version":\s*"(1\.14\.1|0\.30\.4)"'
+    max_depth: 30
+    exclude_dirs: [".git", "proc", "sys", "dev", "run"]
+```
+
+**Example — Find all SSH config files allowing root login:**
+
+```yaml
+- type: file_search
+  config:
+    root_path: /etc
+    filename_pattern: "sshd_config"
+    content_regex: "^PermitRootLogin\\s+yes"
+```
+
+**Example — Locate lockfiles containing a vulnerable package:**
+
+```yaml
+- type: file_search
+  config:
+    root_path: /home
+    filename_pattern: "*.lock"
+    content_regex: "vulnerable-pkg@2\\.3\\.1"
+    max_depth: 10
+```
+
+**Performance notes:**
+
+- Scanning from `/` on large filesystems can be slow. Prefer a narrower `root_path` when the target area is known.
+- Use `exclude_dirs` to skip virtual filesystems (`proc`, `sys`, `dev`) and large irrelevant trees.
+- `max_results` prevents unbounded memory use when many matches exist; evidence includes `truncated: true` so you know results were capped.
+
 ## Risk Scoring & Severity
 
 The agent calculates a final risk score for each finding. The priority for score calculation is:
@@ -240,6 +319,8 @@ The agent calculates a final risk score for each finding. The priority for score
 3.  **Prioritize File Hashes**: Hash checks are faster and more reliable than version string parsing. Use them when targeting specific binaries.
 4.  **Avoid Shell Injection**: The `version_cmd` module executes commands directly, not through a shell. Do not use pipes `|`, redirects `>`, or shell built-ins.
 5.  **Test Your Templates**: Verify templates on a test system before deploying. Use the agent's CLI to run a single template against a target.
+6.  **Scope File Searches**: When using `file_search`, prefer the narrowest `root_path` that covers the target area. Exclude virtual filesystems (`proc`, `sys`, `dev`) and irrelevant trees to keep scans fast.
+7.  **Use file_search for Unknown Paths**: If you don't know where a file lives (e.g., npm packages, user-installed software), use `file_search` instead of guessing paths with `file_content`.
 
 ## Examples
 
@@ -276,4 +357,28 @@ detection:
       config:
         path: /opt/service_x/bin/server
         hash: 5f4dcc3b5aa765d61d8327deb882cf99
+```
+
+### Detect Compromised npm Package (Supply Chain)
+
+```yaml
+id: AXIOS-SUPPLY-CHAIN-2026-001
+info:
+  name: Compromised axios npm Package (Supply Chain Attack)
+  severity: critical
+  description: >
+    Detects compromised axios versions 1.14.1 and 0.30.4 installed in
+    node_modules anywhere on the host. See templates/examples/axios-supply-chain.yaml
+    for the complete template with metadata and remediation guidance.
+detection:
+  logic: all
+  steps:
+    - type: file_search
+      config:
+        root_path: /
+        filename_pattern: "package.json"
+        path_regex: "node_modules/axios/package\\.json$"
+        content_regex: '"version":\s*"(1\.14\.1|0\.30\.4)"'
+        max_depth: 30
+        exclude_dirs: [".git", "proc", "sys", "dev", "run"]
 ```

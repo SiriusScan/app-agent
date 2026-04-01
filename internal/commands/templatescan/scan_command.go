@@ -12,10 +12,10 @@ import (
 
 	"github.com/SiriusScan/app-agent/internal/apiclient"
 	"github.com/SiriusScan/app-agent/internal/commands"
-	"github.com/SiriusScan/app-agent/internal/commands/scan" // For package enumeration
+	"github.com/SiriusScan/app-agent/internal/commands/scan"         // For package enumeration
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register module
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"    // Register module
-	_ "github.com/SiriusScan/app-agent/internal/modules/telnetlinemode"
+	_ "github.com/SiriusScan/app-agent/internal/modules/filesearch"  // Register module
 	"github.com/SiriusScan/app-agent/internal/output"
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/fingerprint"
