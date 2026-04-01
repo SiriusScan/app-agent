@@ -8,6 +8,7 @@ import (
 
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register modules
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"
+	_ "github.com/SiriusScan/app-agent/internal/modules/telnetlinemode"
 	_ "github.com/SiriusScan/app-agent/internal/modules/versioncmd" // Register version_cmd module
 	"github.com/SiriusScan/app-agent/internal/modules/registry"
 	"github.com/SiriusScan/app-agent/internal/template/executor"

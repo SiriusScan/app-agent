@@ -15,6 +15,7 @@ import (
 	"github.com/SiriusScan/app-agent/internal/commands/scan" // For package enumeration
 	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register module
 	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"    // Register module
+	_ "github.com/SiriusScan/app-agent/internal/modules/telnetlinemode"
 	"github.com/SiriusScan/app-agent/internal/output"
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/fingerprint"
