@@ -1,0 +1,44 @@
+id: AXIOS-SUPPLY-CHAIN-2026-001
+info:
+  name: Compromised axios npm Package (Supply Chain Attack)
+  author: Sirius Scan
+  severity: critical
+  vulnerability_id: AXIOS-SUPPLY-CHAIN-2026-001
+  description: >
+    Detects compromised axios versions 1.14.1 and 0.30.4 installed in
+    node_modules anywhere under the search root. These versions were published
+    to npm on 2026-03-31 after a maintainer account compromise and contain a
+    remote access trojan that exfiltrates environment variables and secrets.
+  references:
+    - https://github.com/axios/axios/issues/10604
+    - https://www.stepsecurity.io/blog/axios-compromised-on-npm-malicious-versions-drop-remote-access-trojan
+  cve: []
+  cwe:
+    - CWE-506
+  tags:
+    - supply-chain
+    - npm
+    - axios
+    - malicious-package
+    - trojan
+  version: "1.0.0"
+  risk_score: 9.8
+  remediation: >
+    1. Delete affected node_modules directories and lockfiles.
+    2. Reinstall dependencies from a trusted registry pinning a safe axios
+       version (e.g. 1.7.9 or 1.8.x) per upstream guidance.
+    3. Rotate any secrets, tokens, or credentials used on affected machines.
+    4. Audit CI caches, Docker images, and global npm/yarn/pnpm stores for
+       the compromised versions.
+
+detection:
+  logic: all
+  steps:
+    - type: file_search
+      config:
+        root_path: /
+        filename_pattern: "package.json"
+        path_regex: "node_modules/axios/package\\.json$"
+        content_regex: '"version":\s*"(1\.14\.1|0\.30\.4)"'
+        max_depth: 30
+        exclude_dirs: [".git", "proc", "sys", "dev", "run"]
