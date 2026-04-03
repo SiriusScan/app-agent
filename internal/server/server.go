@@ -1198,31 +1198,89 @@ type AgentTemplateResult struct {
 	Errors          []string `json:"errors,omitempty"`
 }
 
+// isConcreteHostIP returns true only for a single IPv4/IPv6 address string (not CIDR, range, or hostname).
+func isConcreteHostIP(s string) bool {
+	s = strings.TrimSpace(s)
+	if s == "" || strings.Contains(s, "/") || strings.Contains(s, "-") {
+		return false
+	}
+	return net.ParseIP(s) != nil
+}
+
+// primaryIPMatchesTarget reports whether a concrete primary IP falls under a scan target
+// (exact match for single-IP targets, or membership for CIDR targets).
+func primaryIPMatchesTarget(primary, target string) bool {
+	primary = strings.TrimSpace(primary)
+	target = strings.TrimSpace(target)
+	if primary == "" || target == "" || !isConcreteHostIP(primary) {
+		return false
+	}
+	if isConcreteHostIP(target) {
+		return primary == target
+	}
+	if _, ipNet, err := net.ParseCIDR(target); err == nil {
+		ip := net.ParseIP(primary)
+		return ip != nil && ipNet.Contains(ip)
+	}
+	return false
+}
+
+// agentIPMatchesTarget checks whether a resolved IP string matches a target (exact or CIDR).
+func agentIPMatchesTarget(ipStr, target string) bool {
+	ipStr = strings.TrimSpace(ipStr)
+	target = strings.TrimSpace(target)
+	if ipStr == "" || target == "" || !isConcreteHostIP(ipStr) {
+		return false
+	}
+	return primaryIPMatchesTarget(ipStr, target)
+}
+
+func buildAgentClaimedIPs(scanResult *goapistore.ScanResult) map[string]bool {
+	claimedIPs := make(map[string]bool)
+	for _, h := range scanResult.Hosts {
+		for _, src := range h.Sources {
+			if src == "agent" && isConcreteHostIP(h.IP) {
+				claimedIPs[h.IP] = true
+				break
+			}
+		}
+	}
+	return claimedIPs
+}
+
 // resolveAgentHostIP determines the correct target IP for an agent that reported scan results.
-// It uses multiple strategies in priority order:
-//  1. Direct IP match: agent reported its own primary IP and it matches a scan target
-//  2. Match agentHostname against existing host entries (network scan may have already mapped hostname→IP)
-//  3. Check if agentID is itself one of the scan targets
-//  4. DNS-resolve the agentHostname and match against scan targets
-//  5. DNS-resolve the agentID (if different from hostname) and match against targets
-//  6. Pick the first scan target not yet claimed by another agent
-//  7. Fall back to agentID
+// It never returns CIDR/range strings — only a concrete IP or empty string if unresolved.
+// Priority order:
+//  1. Primary IP matches a scan target (exact or CIDR membership)
+//  2. Hostname matches an existing host entry with a concrete IP
+//  3. Agent ID is a concrete IP and matches a target
+//  4–5. DNS-resolve hostname / agent ID and match targets
+//  6. First existing scan host with concrete IP not yet claimed by another agent
+//  7. First concrete single-IP scan target not yet claimed
+//  8. Primary IP if concrete (last resort)
+//  9. Empty string — caller must not create a fake host row
 func (s *Server) resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP string, scanResult *goapistore.ScanResult) string {
-	// Strategy 1: Direct IP match — agent reported its own primary IP
-	if agentPrimaryIP != "" {
+	claimedIPs := buildAgentClaimedIPs(scanResult)
+
+	// Strategy 1: Primary IP vs targets (supports CIDR targets)
+	if agentPrimaryIP != "" && isConcreteHostIP(agentPrimaryIP) {
 		for _, target := range scanResult.Targets {
-			if target == agentPrimaryIP {
-				s.logger.Info("Matched agent primary IP directly to scan target",
+			if primaryIPMatchesTarget(agentPrimaryIP, target) {
+				s.logger.Info("Matched agent primary IP to scan target",
 					zap.String("agent_id", agentID),
-					zap.String("primary_ip", agentPrimaryIP))
+					zap.String("primary_ip", agentPrimaryIP),
+					zap.String("target", target))
 				return agentPrimaryIP
 			}
 		}
 	}
 
-	// Strategy 2: Match hostname against existing host entries
+	// Strategy 2: Hostname against existing host entries (require concrete IP)
 	if agentHostname != "" {
 		for _, h := range scanResult.Hosts {
+			if !isConcreteHostIP(h.IP) {
+				continue
+			}
 			if h.Hostname != "" && h.Hostname == agentHostname {
 				s.logger.Info("Matched agent to existing host by hostname",
 					zap.String("agent_id", agentID),
@@ -1233,12 +1291,14 @@ func (s *Server) resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP strin
 		}
 	}
 
-	// Strategy 3: Check if agentID is directly one of the targets
-	for _, target := range scanResult.Targets {
-		if target == agentID {
-			s.logger.Info("Agent ID matches a scan target directly",
-				zap.String("agent_id", agentID))
-			return agentID
+	// Strategy 3: Agent ID as concrete IP matching a target
+	if isConcreteHostIP(agentID) {
+		for _, target := range scanResult.Targets {
+			if primaryIPMatchesTarget(agentID, target) {
+				s.logger.Info("Agent ID matches a scan target as concrete IP",
+					zap.String("agent_id", agentID))
+				return agentID
+			}
 		}
 	}
 
@@ -1247,7 +1307,7 @@ func (s *Server) resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP strin
 		if ips, err := net.LookupHost(agentHostname); err == nil {
 			for _, ip := range ips {
 				for _, target := range scanResult.Targets {
-					if ip == target {
+					if agentIPMatchesTarget(ip, target) {
 						s.logger.Info("Resolved agent hostname to target IP via DNS",
 							zap.String("agent_id", agentID),
 							zap.String("hostname", agentHostname),
@@ -1260,11 +1320,11 @@ func (s *Server) resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP strin
 	}
 
 	// Strategy 5: DNS-resolve agentID if it differs from hostname
-	if agentID != agentHostname && agentID != "" {
+	if agentID != agentHostname && agentID != "" && !isConcreteHostIP(agentID) {
 		if ips, err := net.LookupHost(agentID); err == nil {
 			for _, ip := range ips {
 				for _, target := range scanResult.Targets {
-					if ip == target {
+					if agentIPMatchesTarget(ip, target) {
 						s.logger.Info("Resolved agent ID to target IP via DNS",
 							zap.String("agent_id", agentID),
 							zap.String("resolved_ip", ip))
@@ -1275,38 +1335,68 @@ func (s *Server) resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP strin
 		}
 	}
 
-	// Strategy 6: Pick the first target not yet claimed by another agent source
-	claimedIPs := make(map[string]bool)
+	// Strategy 6: First existing host with concrete IP not yet claimed by another agent
 	for _, h := range scanResult.Hosts {
-		for _, src := range h.Sources {
-			if src == "agent" {
-				claimedIPs[h.IP] = true
-				break
-			}
+		if !isConcreteHostIP(h.IP) || claimedIPs[h.IP] {
+			continue
 		}
-	}
-	for _, target := range scanResult.Targets {
-		if !claimedIPs[target] {
-			s.logger.Warn("Could not resolve agent to specific target, using first unclaimed target",
-				zap.String("agent_id", agentID),
-				zap.String("hostname", agentHostname),
-				zap.String("primary_ip", agentPrimaryIP),
-				zap.String("target_ip", target))
-			return target
-		}
+		s.logger.Info("Using first unclaimed discovered host for agent",
+			zap.String("agent_id", agentID),
+			zap.String("host_ip", h.IP))
+		return h.IP
 	}
 
-	// Strategy 7: Last resort — use primary IP if available, otherwise agentID
-	if agentPrimaryIP != "" {
-		s.logger.Warn("Could not match agent to any target, using primary IP",
+	// Strategy 7: First concrete single-IP target not yet claimed
+	for _, target := range scanResult.Targets {
+		if !isConcreteHostIP(target) || claimedIPs[target] {
+			continue
+		}
+		s.logger.Info("Using first unclaimed concrete scan target for agent",
+			zap.String("agent_id", agentID),
+			zap.String("target_ip", target))
+		return target
+	}
+
+	// Strategy 8: Last resort — primary IP if concrete (may be outside stated targets)
+	if agentPrimaryIP != "" && isConcreteHostIP(agentPrimaryIP) {
+		s.logger.Warn("Could not align primary IP to targets; using primary IP as host key",
 			zap.String("agent_id", agentID),
 			zap.String("primary_ip", agentPrimaryIP))
 		return agentPrimaryIP
 	}
-	s.logger.Warn("Could not match agent to any target, using agentID as host IP",
+
+	s.logger.Warn("Could not resolve agent to a concrete host IP; skipping host/vuln merge for this result",
 		zap.String("agent_id", agentID),
-		zap.String("hostname", agentHostname))
-	return agentID
+		zap.String("hostname", agentHostname),
+		zap.String("primary_ip", agentPrimaryIP))
+	return ""
+}
+
+// appendAgentVulnerabilitiesDeduped appends agent vulnerabilities keyed by (host_id, vuln id, agent_id).
+func appendAgentVulnerabilitiesDeduped(
+	existing []goapistore.VulnerabilitySummary,
+	newOnes []goapistore.VulnerabilitySummary,
+	hostIP, agentID string,
+) ([]goapistore.VulnerabilitySummary, int) {
+	keys := make(map[string]struct{})
+	for _, v := range existing {
+		if v.ScanSource != "agent" {
+			continue
+		}
+		keys[fmt.Sprintf("%s|%s|%s", v.HostID, v.ID, v.AgentID)] = struct{}{}
+	}
+	added := 0
+	for i := range newOnes {
+		newOnes[i].HostID = hostIP
+		key := fmt.Sprintf("%s|%s|%s", hostIP, newOnes[i].ID, agentID)
+		if _, dup := keys[key]; dup {
+			continue
+		}
+		keys[key] = struct{}{}
+		existing = append(existing, newOnes[i])
+		added++
+	}
+	return existing, added
 }
 
 // mergeAgentScanResults merges agent scan results into the unified currentScan ValKey key
@@ -1441,6 +1531,10 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 		return
 	}
 
+	// Resolve concrete host IP before mutating sub-scan status or host rows
+	hostIP := s.resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP, &scanResult)
+	hostResolved := hostIP != ""
+
 	// Update agent sub-scan status via sub_scans registry
 	if scanResult.SubScans == nil {
 		scanResult.SubScans = make(map[string]goapistore.SubScan)
@@ -1486,8 +1580,13 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 			if result.ExitCode == 0 {
 				agentMeta.AgentStatuses[i].Status = "completed"
 				agentMeta.AgentStatuses[i].CompletedAt = now
-				agentMeta.AgentStatuses[i].HostsFound = 1
-				agentMeta.AgentStatuses[i].VulnerabilitiesFound = len(matchedVulns)
+				if hostResolved {
+					agentMeta.AgentStatuses[i].HostsFound = 1
+					agentMeta.AgentStatuses[i].VulnerabilitiesFound = len(matchedVulns)
+				} else {
+					agentMeta.AgentStatuses[i].HostsFound = 0
+					agentMeta.AgentStatuses[i].VulnerabilitiesFound = 0
+				}
 			} else {
 				agentMeta.AgentStatuses[i].Status = "failed"
 				agentMeta.AgentStatuses[i].CompletedAt = now
@@ -1501,8 +1600,13 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 		newStatus := AgentStatusEntry{AgentID: agentID, CompletedAt: now}
 		if result.ExitCode == 0 {
 			newStatus.Status = "completed"
-			newStatus.HostsFound = 1
-			newStatus.VulnerabilitiesFound = len(matchedVulns)
+			if hostResolved {
+				newStatus.HostsFound = 1
+				newStatus.VulnerabilitiesFound = len(matchedVulns)
+			} else {
+				newStatus.HostsFound = 0
+				newStatus.VulnerabilitiesFound = 0
+			}
 		} else {
 			newStatus.Status = "failed"
 			newStatus.Error = result.Error
@@ -1550,53 +1654,56 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 			zap.String("scan_id", scanID))
 	}
 
-	// Resolve the correct target IP for this specific agent
-	hostIP := s.resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP, &scanResult)
-
-	// Merge host: look up by IP, create or update
-	hostIdx := -1
-	for i, h := range scanResult.Hosts {
-		if h.IP == hostIP {
-			hostIdx = i
-			break
-		}
-	}
-	if hostIdx >= 0 {
-		// Merge: add hostname and source
-		h := &scanResult.Hosts[hostIdx]
-		if agentHostname != "" && h.Hostname == "" {
-			h.Hostname = agentHostname
-		}
-		sourceFound := false
-		for _, src := range h.Sources {
-			if src == "agent" {
-				sourceFound = true
+	if hostResolved {
+		// Merge host: look up by IP, create or update
+		hostIdx := -1
+		for i, h := range scanResult.Hosts {
+			if h.IP == hostIP {
+				hostIdx = i
 				break
 			}
 		}
-		if !sourceFound {
-			h.Sources = append(h.Sources, "agent")
+		if hostIdx >= 0 {
+			// Merge: add hostname and source
+			h := &scanResult.Hosts[hostIdx]
+			if agentHostname != "" && h.Hostname == "" {
+				h.Hostname = agentHostname
+			}
+			sourceFound := false
+			for _, src := range h.Sources {
+				if src == "agent" {
+					sourceFound = true
+					break
+				}
+			}
+			if !sourceFound {
+				h.Sources = append(h.Sources, "agent")
+			}
+		} else {
+			// New host
+			newHost := goapistore.HostEntry{
+				ID:       hostIP,
+				IP:       hostIP,
+				Hostname: agentHostname,
+				Sources:  []string{"agent"},
+			}
+			scanResult.Hosts = append(scanResult.Hosts, newHost)
 		}
-	} else {
-		// New host
-		newHost := goapistore.HostEntry{
-			ID:       hostIP,
-			IP:       hostIP,
-			Hostname: agentHostname,
-			Sources:  []string{"agent"},
-		}
-		scanResult.Hosts = append(scanResult.Hosts, newHost)
-	}
 
-	// Append extracted vulnerabilities with host_id
-	if len(matchedVulns) > 0 {
-		for i := range matchedVulns {
-			matchedVulns[i].HostID = hostIP
+		// Append extracted vulnerabilities with host_id (deduped)
+		if len(matchedVulns) > 0 {
+			var added int
+			scanResult.Vulnerabilities, added = appendAgentVulnerabilitiesDeduped(
+				scanResult.Vulnerabilities, matchedVulns, hostIP, agentID)
+			s.logger.Info("Added agent vulnerabilities to currentScan",
+				zap.Int("new_vulns", added),
+				zap.Int("total_vulns", len(scanResult.Vulnerabilities)))
 		}
-		scanResult.Vulnerabilities = append(scanResult.Vulnerabilities, matchedVulns...)
-		s.logger.Info("Added agent vulnerabilities to currentScan",
-			zap.Int("new_vulns", len(matchedVulns)),
-			zap.Int("total_vulns", len(scanResult.Vulnerabilities)))
+	} else if len(matchedVulns) > 0 && result.ExitCode == 0 {
+		s.logger.Warn("Agent reported vulnerabilities but host IP could not be resolved; not appending to currentScan",
+			zap.String("agent_id", agentID),
+			zap.String("scan_id", scanID),
+			zap.Int("skipped_vulns", len(matchedVulns)))
 	}
 
 	// Write back to ValKey

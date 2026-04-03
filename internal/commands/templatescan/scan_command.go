@@ -133,8 +133,9 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 	results, execErrors := executor.ExecuteTemplatesParallelWithConfig(templates, poolConfig)
 	executionTime := time.Since(startTime)
 
-	// Submit to REST API if enabled and we have matched results
-	if shouldSubmitToAPI(agentInfo, results) {
+	// Submit to REST API if enabled and we have matched results (standalone / DB persistence).
+	// Coordinated scans (ScanID set): engine merge via agent server is authoritative; missing API key is OK.
+	if shouldSubmitToAPI(agentInfo, results, config.ScanID) {
 		agentInfo.Logger.Info("Submitting template results to REST API")
 		go submitTemplateResultsToAPI(ctx, agentInfo, results, executionTime)
 	}
@@ -307,8 +308,10 @@ type ScanConfig struct {
 	ScanID         string // Coordinated scan ID for unified scan results
 }
 
-// shouldSubmitToAPI checks if we should submit results to the REST API
-func shouldSubmitToAPI(agentInfo commands.AgentInfo, results []*types.Result) bool {
+// shouldSubmitToAPI checks if we should submit results to the REST API.
+// scanID non-empty means coordinated mode: structured results are merged by the app-agent server into Valkey;
+// REST submission is optional and should not warn about a missing service API key.
+func shouldSubmitToAPI(agentInfo commands.AgentInfo, results []*types.Result, scanID string) bool {
 	// Don't submit if API client is not available
 	if agentInfo.APIClient == nil {
 		return false
@@ -321,9 +324,15 @@ func shouldSubmitToAPI(agentInfo commands.AgentInfo, results []*types.Result) bo
 
 	// Don't submit if service API key is not configured
 	if !apiclient.ServiceAPIKeyConfigured() {
-		agentInfo.Logger.Warn("Skipping API submission: service API key is not configured",
-			zap.String("api_base_url", agentInfo.Config.ApiBaseURL),
-			zap.Strings("accepted_env_vars", apiclient.ServiceAPIKeyEnvNames()))
+		if scanID != "" {
+			agentInfo.Logger.Info("Coordinated scan: skipping REST API submission (no service API key); engine merge is canonical",
+				zap.String("scan_id", scanID),
+				zap.String("api_base_url", agentInfo.Config.ApiBaseURL))
+		} else {
+			agentInfo.Logger.Warn("Skipping API submission: service API key is not configured",
+				zap.String("api_base_url", agentInfo.Config.ApiBaseURL),
+				zap.Strings("accepted_env_vars", apiclient.ServiceAPIKeyEnvNames()))
+		}
 		return false
 	}
 
