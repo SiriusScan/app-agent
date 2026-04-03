@@ -1235,6 +1235,18 @@ func agentIPMatchesTarget(ipStr, target string) bool {
 	return primaryIPMatchesTarget(ipStr, target)
 }
 
+func appendUniqueString(slice []string, s string) []string {
+	if s == "" {
+		return slice
+	}
+	for _, x := range slice {
+		if x == s {
+			return slice
+		}
+	}
+	return append(slice, s)
+}
+
 func buildAgentClaimedIPs(scanResult *goapistore.ScanResult) map[string]bool {
 	claimedIPs := make(map[string]bool)
 	for _, h := range scanResult.Hosts {
@@ -1654,6 +1666,7 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 			zap.String("scan_id", scanID))
 	}
 
+	vulnsAdded := 0
 	if hostResolved {
 		// Merge host: look up by IP, create or update
 		hostIdx := -1
@@ -1666,8 +1679,13 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 		if hostIdx >= 0 {
 			// Merge: add hostname and source
 			h := &scanResult.Hosts[hostIdx]
-			if agentHostname != "" && h.Hostname == "" {
-				h.Hostname = agentHostname
+			if agentHostname != "" {
+				if h.Hostname == "" {
+					h.Hostname = agentHostname
+				} else if h.Hostname != agentHostname {
+					// Preserve network-discovered name; keep agent-reported name as an alias
+					h.Aliases = appendUniqueString(h.Aliases, agentHostname)
+				}
 			}
 			sourceFound := false
 			for _, src := range h.Sources {
@@ -1695,6 +1713,7 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 			var added int
 			scanResult.Vulnerabilities, added = appendAgentVulnerabilitiesDeduped(
 				scanResult.Vulnerabilities, matchedVulns, hostIP, agentID)
+			vulnsAdded = added
 			s.logger.Info("Added agent vulnerabilities to currentScan",
 				zap.Int("new_vulns", added),
 				zap.Int("total_vulns", len(scanResult.Vulnerabilities)))
@@ -1728,7 +1747,7 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 	s.logger.Info("Successfully merged agent scan results into currentScan",
 		zap.String("scan_id", scanID),
 		zap.String("agent_id", agentID),
-		zap.Int("vulnerabilities_added", len(matchedVulns)),
+		zap.Int("vulnerabilities_added", vulnsAdded),
 		zap.String("host_ip", hostIP))
 }
 
