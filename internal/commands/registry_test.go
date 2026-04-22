@@ -17,13 +17,12 @@ func (m *MockCommand) Execute(ctx context.Context, agentInfo AgentInfo, commandS
 	return m.ReturnOutput, m.ReturnError
 }
 
+func resetRegistryForTest() {
+	ResetDefaultRegistryForTests()
+}
+
 func TestRegisterAlias(t *testing.T) {
-	// Clear existing registrations for testing
-	registryMu.Lock()
-	registry = make(map[string]Command)
-	aliases = make(map[string]string)
-	orderedPrefixes = []string{}
-	registryMu.Unlock()
+	resetRegistryForTest()
 
 	// Register a test command
 	mockCmd := &MockCommand{ReturnOutput: "test output"}
@@ -33,10 +32,8 @@ func TestRegisterAlias(t *testing.T) {
 	RegisterAlias("tc", "test:command")
 
 	// Verify alias was registered
-	if canonical, exists := aliases["tc"]; !exists {
+	if !DefaultRegistry().HasAlias("tc") {
 		t.Error("Alias 'tc' was not registered")
-	} else if canonical != "test:command" {
-		t.Errorf("Alias 'tc' points to %q, expected 'test:command'", canonical)
 	}
 
 	// Verify we can dispatch using the alias
@@ -57,12 +54,7 @@ func TestRegisterAlias(t *testing.T) {
 }
 
 func TestRegisterAlias_Panics(t *testing.T) {
-	// Clear existing registrations for testing
-	registryMu.Lock()
-	registry = make(map[string]Command)
-	aliases = make(map[string]string)
-	orderedPrefixes = []string{}
-	registryMu.Unlock()
+	resetRegistryForTest()
 
 	// Test: Panic when canonical prefix doesn't exist
 	defer func() {
@@ -75,12 +67,7 @@ func TestRegisterAlias_Panics(t *testing.T) {
 }
 
 func TestRegisterAlias_DuplicatePanic(t *testing.T) {
-	// Clear existing registrations for testing
-	registryMu.Lock()
-	registry = make(map[string]Command)
-	aliases = make(map[string]string)
-	orderedPrefixes = []string{}
-	registryMu.Unlock()
+	resetRegistryForTest()
 
 	mockCmd := &MockCommand{}
 	Register("test:cmd", mockCmd)
@@ -97,12 +84,7 @@ func TestRegisterAlias_DuplicatePanic(t *testing.T) {
 }
 
 func TestListCommands(t *testing.T) {
-	// Clear existing registrations for testing
-	registryMu.Lock()
-	registry = make(map[string]Command)
-	aliases = make(map[string]string)
-	orderedPrefixes = []string{}
-	registryMu.Unlock()
+	resetRegistryForTest()
 
 	// Register test commands and aliases
 	mockCmd1 := &MockCommand{}
@@ -139,12 +121,7 @@ func TestListCommands(t *testing.T) {
 }
 
 func TestDispatch_LongestPrefixMatching(t *testing.T) {
-	// Clear existing registrations for testing
-	registryMu.Lock()
-	registry = make(map[string]Command)
-	aliases = make(map[string]string)
-	orderedPrefixes = []string{}
-	registryMu.Unlock()
+	resetRegistryForTest()
 
 	// Register commands with overlapping prefixes
 	shortCmd := &MockCommand{ReturnOutput: "short"}
@@ -170,5 +147,3 @@ func TestDispatch_LongestPrefixMatching(t *testing.T) {
 		t.Error("Short command should not have been executed")
 	}
 }
-
-

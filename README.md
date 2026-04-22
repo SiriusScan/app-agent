@@ -53,6 +53,9 @@ Run a single template against the local system:
 
 # List available templates
 ./sirius-agent template list
+
+# Collect local inventory
+./sirius-agent scan
 ```
 
 ### Server Mode (Default)

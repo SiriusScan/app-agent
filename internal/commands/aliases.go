@@ -41,13 +41,15 @@ func RegisterBuiltinAliases() {
 // safeRegisterAlias registers an alias only if the target command exists.
 // This prevents panics if a command isn't compiled in or doesn't exist yet.
 func safeRegisterAlias(alias, canonicalPrefix string) {
+	registry := DefaultRegistry()
+
 	// Check if the canonical prefix exists
-	if _, exists := Get(canonicalPrefix); exists {
+	if _, exists := registry.Get(canonicalPrefix); exists {
 		// Only register if not already registered
-		if _, alreadyExists := aliases[alias]; !alreadyExists {
+		if !registry.HasAlias(alias) {
 			// Also check it doesn't conflict with existing prefixes
-			if _, conflictsWith := registry[alias]; !conflictsWith {
-				RegisterAlias(alias, canonicalPrefix)
+			if !registry.HasCommand(alias) {
+				registry.RegisterAlias(alias, canonicalPrefix)
 			}
 		}
 	}

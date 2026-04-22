@@ -19,7 +19,24 @@ type AgentInfo struct {
 	StartTime        time.Time
 	ScriptingEnabled bool   // Is PowerShell/scripting available and enabled?
 	PowerShellPath   string // Path to the PowerShell executable
+	TemplateSync     TemplateSync
 	// Add other shared resources if needed
+}
+
+// TemplateSyncStatus is a transport-agnostic view of template cache state.
+type TemplateSyncStatus struct {
+	LastSync          time.Time
+	TotalTemplates    int
+	StandardTemplates int
+	CustomTemplates   int
+	CacheSize         int64
+}
+
+// TemplateSync defines the sync behavior the agent runtime can inject into
+// commands without relying on package-global state.
+type TemplateSync interface {
+	SyncFromServer(ctx context.Context) error
+	GetStatus(ctx context.Context) (*TemplateSyncStatus, error)
 }
 
 // APIClient defines the interface for API functions needed by internal commands.

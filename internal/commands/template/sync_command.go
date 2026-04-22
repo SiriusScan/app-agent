@@ -4,36 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/SiriusScan/app-agent/internal/commands"
-	templateagent "github.com/SiriusScan/app-agent/internal/template/agent"
-)
-
-var (
-	// Global sync manager reference - set by integration layer
-	syncManagerMutex  sync.RWMutex
-	globalSyncManager *templateagent.AgentSyncManager
 )
 
 func init() {
 	commands.Register("internal:template sync", &SyncCommand{})
 	commands.RegisterAlias("template sync", "internal:template sync")
 	commands.RegisterAlias("sync templates", "internal:template sync")
-}
-
-// SetGlobalSyncManager sets the global sync manager reference
-func SetGlobalSyncManager(manager *templateagent.AgentSyncManager) {
-	syncManagerMutex.Lock()
-	defer syncManagerMutex.Unlock()
-	globalSyncManager = manager
-}
-
-// GetGlobalSyncManager gets the global sync manager reference
-func GetGlobalSyncManager() *templateagent.AgentSyncManager {
-	syncManagerMutex.RLock()
-	defer syncManagerMutex.RUnlock()
-	return globalSyncManager
 }
 
 // SyncCommand synchronizes templates from the server
@@ -43,14 +21,12 @@ type SyncCommand struct{}
 func (c *SyncCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo, commandString string, args string) (string, error) {
 	agentInfo.Logger.Info("Executing template sync command")
 
-	// Get the global sync manager
-	syncManager := GetGlobalSyncManager()
-	if syncManager == nil {
+	if agentInfo.TemplateSync == nil {
 		return "", fmt.Errorf("sync manager not initialized; cannot sync templates")
 	}
 
 	// Trigger template sync from server via gRPC
-	if err := syncManager.SyncFromServer(ctx); err != nil {
+	if err := agentInfo.TemplateSync.SyncFromServer(ctx); err != nil {
 		agentInfo.Logger.Error("Template sync failed")
 
 		result := map[string]interface{}{
@@ -64,9 +40,10 @@ func (c *SyncCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 	}
 
 	// Get cache status to show sync results
-	cacheStatus, err := syncManager.GetCacheStatus()
+	cacheStatus, err := agentInfo.TemplateSync.GetStatus(ctx)
 	if err != nil {
 		agentInfo.Logger.Warn("Failed to get cache status after sync")
+		cacheStatus = &commands.TemplateSyncStatus{}
 	}
 
 	result := map[string]interface{}{
@@ -74,10 +51,10 @@ func (c *SyncCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 		"message": "Template sync completed successfully",
 		"details": map[string]interface{}{
 			"last_sync":          cacheStatus.LastSync,
-			"total_templates":    cacheStatus.Statistics.TotalTemplates,
-			"standard_templates": cacheStatus.Statistics.StandardTemplates,
-			"custom_templates":   cacheStatus.Statistics.CustomTemplates,
-			"cache_size":         cacheStatus.Statistics.CacheSize,
+			"total_templates":    cacheStatus.TotalTemplates,
+			"standard_templates": cacheStatus.StandardTemplates,
+			"custom_templates":   cacheStatus.CustomTemplates,
+			"cache_size":         cacheStatus.CacheSize,
 		},
 	}
 

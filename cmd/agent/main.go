@@ -8,8 +8,9 @@ import (
 
 	"go.uber.org/zap"
 
-	"github.com/SiriusScan/app-agent/internal/agent"
 	"github.com/SiriusScan/app-agent/internal/config"
+	siriusbootstrap "github.com/SiriusScan/app-agent/internal/family/sirius/bootstrap"
+	"github.com/SiriusScan/app-agent/internal/family/sirius/connector"
 )
 
 func main() {
@@ -27,17 +28,17 @@ func main() {
 		zap.String("server_address", cfg.ServerAddress),
 		zap.String("agent_id", cfg.AgentID))
 
+	siriusbootstrap.LoadCompatibilityRuntime()
+
 	// Create a context with cancellation
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Create and connect the agent
-	a := agent.NewAgent(cfg, logger)
-
-	if err := a.Connect(ctx); err != nil {
+	runner := connector.NewRunner(cfg, logger)
+	if err := runner.Start(ctx); err != nil {
 		logger.Fatal("Failed to connect agent", zap.Error(err))
 	}
-	defer a.Close()
+	defer runner.Stop()
 
 	// Handle termination signals
 	signalChan := make(chan os.Signal, 1)
@@ -47,7 +48,7 @@ func main() {
 	errChan := make(chan error, 1)
 	go func() {
 		logger.Info("Starting to listen for commands from server")
-		errChan <- a.WaitForCommands(ctx)
+		errChan <- <-runner.Errors()
 	}()
 
 	// Wait for either an error or a termination signal

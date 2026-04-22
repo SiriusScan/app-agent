@@ -6,16 +6,14 @@ import (
 	"fmt"
 	"os"
 
-	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent" // Register modules
-	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"
-	_ "github.com/SiriusScan/app-agent/internal/modules/filesearch"
+	siriusbootstrap "github.com/SiriusScan/app-agent/internal/family/sirius/bootstrap"
 	"github.com/SiriusScan/app-agent/internal/modules/registry"
-	_ "github.com/SiriusScan/app-agent/internal/modules/versioncmd" // Register version_cmd module
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/parser"
 )
 
 func main() {
+	siriusbootstrap.LoadCompatibilityRuntime()
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)

@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SiriusScan/app-agent/internal/apiclient"
 	"github.com/SiriusScan/app-agent/internal/commands"
+	"github.com/SiriusScan/app-agent/internal/debugtrace"
 	"github.com/SiriusScan/app-agent/internal/sysinfo"
 	"github.com/SiriusScan/go-api/sirius"
 	"go.uber.org/zap"
@@ -43,10 +45,27 @@ func (c *StatusCommand) Execute(ctx context.Context, agentInfo commands.AgentInf
 		}
 
 		if err := agentInfo.APIClient.UpdateHostRecord(apiCtx, agentInfo.Config.ApiBaseURL, hostData); err != nil {
+			// #region agent log
+			debugtrace.Log("pre-fix", "H3,H5", "internal/commands/status/status_command.go:46", "status_api_update_failed", map[string]interface{}{
+				"agentId":          agentInfo.Config.AgentID,
+				"hostId":           agentInfo.Config.HostID,
+				"apiBaseURL":       agentInfo.Config.ApiBaseURL,
+				"serviceAPIKeySet": apiclient.ServiceAPIKeyConfigured(),
+				"error":            err.Error(),
+			})
+			// #endregion
 			agentInfo.Logger.Error("Failed to update host record via API (from status command)",
 				zap.String("host_id", agentInfo.Config.HostID),
 				zap.Error(err))
 		} else {
+			// #region agent log
+			debugtrace.Log("pre-fix", "H3,H5", "internal/commands/status/status_command.go:56", "status_api_update_succeeded", map[string]interface{}{
+				"agentId":          agentInfo.Config.AgentID,
+				"hostId":           agentInfo.Config.HostID,
+				"apiBaseURL":       agentInfo.Config.ApiBaseURL,
+				"serviceAPIKeySet": apiclient.ServiceAPIKeyConfigured(),
+			})
+			// #endregion
 			agentInfo.Logger.Info("Successfully updated host record via API (from status command)", zap.String("host_id", agentInfo.Config.HostID))
 		}
 	}()

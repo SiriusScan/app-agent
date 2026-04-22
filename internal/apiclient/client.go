@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SiriusScan/app-agent/internal/debugtrace"
 	"github.com/SiriusScan/go-api/sirius"
 	"github.com/SiriusScan/go-api/sirius/postgres/models"
 )
@@ -23,16 +24,61 @@ var serviceAPIKeyEnvNames = []string{
 	"API_KEY",
 }
 
+var serviceAPIKeyFileEnvNames = []string{
+	"SIRIUS_API_KEY_FILE",
+	"SIRIUS_AGENT_API_KEY_FILE",
+	"API_KEY_FILE",
+}
+
 func serviceAPIKey() (string, error) {
 	for _, envName := range serviceAPIKeyEnvNames {
 		key := strings.TrimSpace(os.Getenv(envName))
 		if key != "" {
+			// #region agent log
+			debugtrace.Log("pre-fix", "H3,H5", "internal/apiclient/client.go:34", "service_api_key_from_env", map[string]interface{}{
+				"envName": envName,
+			})
+			// #endregion
 			return key, nil
 		}
 	}
+	for _, envName := range serviceAPIKeyFileEnvNames {
+		path := strings.TrimSpace(os.Getenv(envName))
+		if path == "" {
+			continue
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			// #region agent log
+			debugtrace.Log("pre-fix", "H3,H5", "internal/apiclient/client.go:47", "service_api_key_file_read_failed", map[string]interface{}{
+				"envName": envName,
+				"path":    path,
+				"error":   err.Error(),
+			})
+			// #endregion
+			continue
+		}
+		key := strings.TrimSpace(string(data))
+		if key != "" {
+			// #region agent log
+			debugtrace.Log("pre-fix", "H3,H5", "internal/apiclient/client.go:57", "service_api_key_from_file", map[string]interface{}{
+				"envName": envName,
+				"path":    path,
+			})
+			// #endregion
+			return key, nil
+		}
+	}
+	// #region agent log
+	debugtrace.Log("pre-fix", "H3,H5", "internal/apiclient/client.go:65", "service_api_key_missing", map[string]interface{}{
+		"acceptedEnvVars":     serviceAPIKeyEnvNames,
+		"acceptedFileEnvVars": serviceAPIKeyFileEnvNames,
+	})
+	// #endregion
 	return "", fmt.Errorf(
-		"service API key is required for agent API calls (set one of: %s)",
+		"service API key is required for agent API calls (set one of: %s or file variants: %s)",
 		strings.Join(serviceAPIKeyEnvNames, ", "),
+		strings.Join(serviceAPIKeyFileEnvNames, ", "),
 	)
 }
 
@@ -44,8 +90,9 @@ func ServiceAPIKeyConfigured() bool {
 
 // ServiceAPIKeyEnvNames returns a copy of accepted API key env var names.
 func ServiceAPIKeyEnvNames() []string {
-	names := make([]string, len(serviceAPIKeyEnvNames))
-	copy(names, serviceAPIKeyEnvNames)
+	names := make([]string, 0, len(serviceAPIKeyEnvNames)+len(serviceAPIKeyFileEnvNames))
+	names = append(names, serviceAPIKeyEnvNames...)
+	names = append(names, serviceAPIKeyFileEnvNames...)
 	return names
 }
 

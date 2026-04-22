@@ -6,23 +6,15 @@ import (
 	"fmt"
 	"runtime"
 	"strconv"
-	"sync"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
-
-	// Import for Host struct
 
 	"github.com/SiriusScan/app-agent/internal/commands"
-	_ "github.com/SiriusScan/app-agent/internal/commands/help"         // Import for side-effect (registration)
-	_ "github.com/SiriusScan/app-agent/internal/commands/scan"         // Import for side-effect (registration)
-	_ "github.com/SiriusScan/app-agent/internal/commands/status"       // Import for side-effect (registration)
-	_ "github.com/SiriusScan/app-agent/internal/commands/template"     // Import for side-effect (registration)
-	_ "github.com/SiriusScan/app-agent/internal/commands/templatescan" // Import for side-effect (registration)
 	"github.com/SiriusScan/app-agent/internal/config"
+	"github.com/SiriusScan/app-agent/internal/debugtrace"
+	siriusruntime "github.com/SiriusScan/app-agent/internal/family/sirius/runtime"
 	"github.com/SiriusScan/app-agent/internal/shell"
 	templateagent "github.com/SiriusScan/app-agent/internal/template/agent"
 	pb "github.com/SiriusScan/app-agent/proto/hello"
@@ -32,10 +24,7 @@ import (
 type Agent struct {
 	logger    *zap.Logger
 	config    *config.AgentConfig
-	conn      *grpc.ClientConn
-	client    pb.HelloServiceClient
-	stream    pb.HelloService_ConnectStreamClient
-	streamMu  sync.Mutex         // Protects concurrent Send() calls on the stream
+	transport *grpcTransport
 	startTime time.Time          // Time the agent was initialized
 	agentInfo commands.AgentInfo // Dependencies to pass to commands
 
@@ -52,59 +41,17 @@ type Agent struct {
 
 // NewAgent creates a new HelloService client (agent)
 func NewAgent(cfg *config.AgentConfig, logger *zap.Logger) *Agent {
-	// Register built-in command aliases after all commands have been registered
-	commands.RegisterBuiltinAliases()
-
-	psPath := cfg.PowerShellPath
-	psFound := false
-	var findErr error
-
-	if psPath == "" {
-		// If no override path, try to find PowerShell/pwsh
-		logger.Debug("PowerShell path not configured, attempting to find...")
-		psPath, psFound, findErr = shell.FindPowerShell()
-		if findErr != nil {
-			// Log the error but don't fail agent initialization
-			logger.Warn("Error finding PowerShell", zap.String("executable", psPath), zap.Error(findErr))
-		} else if psFound {
-			logger.Info("Found PowerShell executable", zap.String("path", psPath))
-		} else {
-			logger.Info("PowerShell executable (pwsh/powershell.exe) not found in PATH")
-		}
-	} else {
-		// If path is configured, assume it's usable (existence check might be added later if needed)
-		logger.Info("Using configured PowerShell path", zap.String("path", psPath))
-		psFound = true // Assume configured path is valid for capability reporting
-	}
-
-	// Determine final scripting capability
-	scriptingIsEnabled := cfg.EnableScripting && psFound
-	logger.Info("Scripting capability determined",
-		zap.Bool("config_enabled", cfg.EnableScripting),
-		zap.Bool("powershell_found", psFound),
-		zap.Bool("scripting_active", scriptingIsEnabled))
-
-	// Create API Client adapter
-	apiAdapter := commands.NewAPIClientAdapter()
-
-	// Create AgentInfo struct
-	agentInfo := commands.AgentInfo{
-		Logger:           logger,
-		Config:           cfg,
-		APIClient:        apiAdapter,
-		StartTime:        time.Now(),         // Use current time for AgentInfo
-		ScriptingEnabled: scriptingIsEnabled, // Pass the determined status
-		PowerShellPath:   psPath,             // Pass the found/configured path
-	}
+	runtimeCtx := siriusruntime.NewContext(cfg, logger)
 
 	return &Agent{
 		logger:           logger,
 		config:           cfg,
-		startTime:        agentInfo.StartTime, // Align agent startTime with AgentInfo
-		powerShellPath:   psPath,              // Store the found or configured path
-		scriptingEnabled: scriptingIsEnabled,
-		agentInfo:        agentInfo, // Store the AgentInfo struct
-		authToken:        cfg.AuthToken,       // Load persisted token (may be empty)
+		transport:        newGRPCTransport(logger),
+		startTime:        runtimeCtx.AgentInfo.StartTime,
+		powerShellPath:   runtimeCtx.PowerShellPath,
+		scriptingEnabled: runtimeCtx.ScriptingEnabled,
+		agentInfo:        runtimeCtx.AgentInfo,
+		authToken:        cfg.AuthToken,
 	}
 }
 
@@ -112,37 +59,23 @@ func NewAgent(cfg *config.AgentConfig, logger *zap.Logger) *Agent {
 func (a *Agent) Connect(ctx context.Context) error {
 	a.logger.Info("Connecting to server", zap.String("address", a.config.ServerAddress))
 
-	conn, err := grpc.NewClient(
-		a.config.ServerAddress,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		return fmt.Errorf("failed to connect to server: %w", err)
+	if err := a.transport.Connect(a.config.ServerAddress); err != nil {
+		return err
 	}
-
-	a.conn = conn
-	a.client = pb.NewHelloServiceClient(conn)
 	a.logger.Info("Connected to server successfully")
 
 	// --- Start Stream with Metadata ---
 	a.logger.Info("Opening bidirectional stream with server")
 
-	// Prepare metadata
-	md := metadata.New(map[string]string{
+	stream, err := a.transport.OpenStream(ctx, map[string]string{
 		"agent_id":          a.config.AgentID,
 		"scripting_enabled": strconv.FormatBool(a.scriptingEnabled),
 		// Add other relevant capabilities here if needed
 	})
-	streamCtx := metadata.NewOutgoingContext(ctx, md)
-
-	// Open the bidirectional stream with metadata
-	stream, err := a.client.ConnectStream(streamCtx)
 	if err != nil {
-		// Close the underlying connection if stream fails
-		a.conn.Close()
-		return fmt.Errorf("failed to establish stream: %w", err)
+		return err
 	}
-	a.stream = stream
+	_ = stream
 	a.logger.Info("Stream established successfully")
 
 	return nil
@@ -150,9 +83,9 @@ func (a *Agent) Connect(ctx context.Context) error {
 
 // Close closes the gRPC connection
 func (a *Agent) Close() error {
-	if a.conn != nil {
+	if a.transport != nil {
 		a.logger.Info("Closing connection to server")
-		return a.conn.Close()
+		return a.transport.Close()
 	}
 	return nil
 }
@@ -167,7 +100,7 @@ func (a *Agent) Ping(ctx context.Context) error {
 	}
 
 	// Send the request
-	resp, err := a.client.Ping(ctx, req)
+	resp, err := a.transport.Ping(ctx, req)
 	if err != nil {
 		a.logger.Error("Failed to ping server", zap.Error(err))
 		return fmt.Errorf("failed to ping server: %w", err)
@@ -182,25 +115,54 @@ func (a *Agent) Ping(ctx context.Context) error {
 
 // WaitForCommands listens for commands from the server using the established stream
 func (a *Agent) WaitForCommands(ctx context.Context) error {
-	if a.stream == nil {
+	if a.transport.Stream() == nil {
 		return fmt.Errorf("stream not established; call Connect first")
 	}
 
 	a.logger.Info("Starting to wait for commands on established stream")
+	// #region agent log
+	debugtrace.Log("pre-fix", "H1,H2,H4", "internal/agent/agent.go:125", "wait_for_commands_enter", map[string]interface{}{
+		"agentId":       a.config.AgentID,
+		"serverAddress": a.config.ServerAddress,
+		"tokenFilePath": a.config.TokenFilePath,
+		"hasToken":      a.authToken != "",
+	})
+	// #endregion
 
 	// ── Send initial heartbeat with auth token ────────────────────────────
 	// The server expects the very first message to contain the agent_id
 	// and (optionally) the auth_token for authentication.
 	if err := a.sendAuthenticatedHeartbeat(ctx); err != nil {
+		// #region agent log
+		debugtrace.Log("pre-fix", "H1,H2,H4", "internal/agent/agent.go:136", "initial_heartbeat_failed", map[string]interface{}{
+			"agentId": a.config.AgentID,
+			"error":   err.Error(),
+		})
+		// #endregion
 		return fmt.Errorf("failed to send initial authenticated heartbeat: %w", err)
 	}
 
 	// ── Receive and process the welcome message ───────────────────────────
 	// The server responds with a welcome/status command that may carry a
 	// newly-issued auth_token for brand-new agents.
-	welcomeMsg, err := a.stream.Recv()
+	welcomeMsg, err := a.transport.Stream().Recv()
 	if err != nil {
 		a.logger.Error("Error receiving welcome message from server", zap.Error(err))
+		// #region agent log
+		debugtrace.Log("pre-fix", "H1,H3,H4", "internal/agent/agent.go:147", "welcome_receive_failed", map[string]interface{}{
+			"agentId":       a.config.AgentID,
+			"tokenFilePath": a.config.TokenFilePath,
+			"hasToken":      a.authToken != "",
+			"error":         err.Error(),
+		})
+		// #endregion
+		if strings.Contains(err.Error(), "agent token validation failed") {
+			a.logger.Error(
+				"Server rejected the persisted auth token — common after switching Sirius engines, resetting Valkey, or using Docker Sirius. Clear the token and reconnect so the engine can issue a new one.",
+				zap.String("token_file", a.config.TokenFilePath),
+				zap.String("unset_env", "AGENT_AUTH_TOKEN"),
+			)
+		}
 		return fmt.Errorf("error receiving welcome message: %w", err)
 	}
 
@@ -213,6 +175,15 @@ func (a *Agent) WaitForCommands(ctx context.Context) error {
 				zap.Error(err))
 		}
 	}
+	// #region agent log
+	debugtrace.Log("pre-fix", "H1,H3,H5", "internal/agent/agent.go:170", "welcome_received", map[string]interface{}{
+		"agentId":         a.config.AgentID,
+		"messageType":     int32(welcomeMsg.GetType()),
+		"command":         welcomeMsg.GetCommand().GetCommand(),
+		"authTokenIssued": welcomeMsg.GetAuthToken() != "",
+		"tokenFilePath":   a.config.TokenFilePath,
+	})
+	// #endregion
 
 	// Process the welcome message content (usually an internal:status command).
 	a.processServerMessage(ctx, welcomeMsg)
@@ -224,7 +195,7 @@ func (a *Agent) WaitForCommands(ctx context.Context) error {
 
 	// Listen for messages from the server
 	for {
-		msg, err := a.stream.Recv()
+		msg, err := a.transport.Stream().Recv()
 		if err != nil {
 			a.logger.Error("Error receiving message from server stream", zap.Error(err))
 			return fmt.Errorf("error receiving message from server stream: %w", err)
@@ -260,7 +231,7 @@ func (a *Agent) processServerMessage(ctx context.Context, msg *pb.ServerMessage)
 // sendAuthenticatedHeartbeat sends the initial heartbeat including the auth
 // token so the server can authenticate (or provision) this agent.
 func (a *Agent) sendAuthenticatedHeartbeat(ctx context.Context) error {
-	if a.stream == nil {
+	if a.transport.Stream() == nil {
 		return fmt.Errorf("no active stream")
 	}
 
@@ -310,7 +281,7 @@ func (a *Agent) heartbeatRoutine(ctx context.Context) {
 // sendHeartbeat sends a heartbeat message to the server
 func (a *Agent) sendHeartbeat(ctx context.Context) error {
 	// Only send if we have a stream
-	if a.stream == nil {
+	if a.transport.Stream() == nil {
 		return fmt.Errorf("no active stream")
 	}
 
@@ -345,9 +316,7 @@ func (a *Agent) sendHeartbeat(ctx context.Context) error {
 // StreamSend sends a message on the gRPC stream with mutex protection.
 // gRPC stream Send() is not safe for concurrent calls from multiple goroutines.
 func (a *Agent) StreamSend(msg *pb.AgentMessage) error {
-	a.streamMu.Lock()
-	defer a.streamMu.Unlock()
-	return a.stream.Send(msg)
+	return a.transport.Send(msg)
 }
 
 // handleCommand processes a command received from the server
@@ -414,7 +383,7 @@ func (a *Agent) executeScriptCommand(ctx context.Context, scriptContent string) 
 
 // sendCommandResult sends the result of a command execution back to the server.
 func (a *Agent) sendCommandResult(ctx context.Context, originalCommand, output, errorMsg string, exitCode int32, executionTimeMs int64) {
-	if a.stream == nil {
+	if a.transport.Stream() == nil {
 		a.logger.Error("Cannot send command result: no active stream")
 		return
 	}
@@ -494,12 +463,13 @@ func (a *Agent) handleTemplateUpdate(ctx context.Context, update *pb.TemplateUpd
 // SetSyncManager sets the template sync manager for this agent
 func (a *Agent) SetSyncManager(syncManager *templateagent.AgentSyncManager) {
 	a.syncManager = syncManager
+	a.agentInfo.TemplateSync = &templateSyncAdapter{manager: syncManager}
 	a.logger.Info("Template sync manager set for agent")
 }
 
 // GetStream returns the gRPC stream for this agent
 func (a *Agent) GetStream() pb.HelloService_ConnectStreamClient {
-	return a.stream
+	return a.transport.Stream()
 }
 
 // Helper function (add if not already present or import strings)

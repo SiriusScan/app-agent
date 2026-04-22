@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SiriusScan/app-agent/internal/debugtrace"
 	valkey "github.com/valkey-io/valkey-go"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -658,6 +659,11 @@ func (s *Server) StartQueueProcessor(ctx context.Context) {
 	go func() {
 		processor := func(msg string) {
 			s.logger.Info("Received message on agent queue", zap.String("message", msg))
+			// #region agent log
+			debugtrace.Log("ui-pre-fix", "H6,H9", "internal/server/server.go:661", "server_agent_queue_received", map[string]interface{}{
+				"message": msg,
+			})
+			// #endregion
 			var cmdMsg CommandMessage
 			if err := json.Unmarshal([]byte(msg), &cmdMsg); err != nil {
 				s.logger.Error("Failed to unmarshal command message", zap.Error(err), zap.String("message", msg))
@@ -697,6 +703,12 @@ func (s *Server) handleListAgents() {
 		agentIDs = append(agentIDs, id)
 	}
 	s.agentsMutex.RUnlock()
+	// #region agent log
+	debugtrace.Log("ui-pre-fix", "H6,H9", "internal/server/server.go:701", "server_handle_list_agents", map[string]interface{}{
+		"count": agentIDsCount(agentIDs),
+		"ids":   agentIDs,
+	})
+	// #endregion
 
 	responseBytes, err := json.Marshal(agentIDs) // Send back only the array of IDs
 	if err != nil {
@@ -710,6 +722,15 @@ func (s *Server) handleListAgents() {
 		s.logger.Error("Failed to send agent list response", zap.Error(err))
 	}
 	s.logger.Info("Sent agent list response", zap.Strings("agents", agentIDs))
+	// #region agent log
+	debugtrace.Log("ui-pre-fix", "H6,H9", "internal/server/server.go:720", "server_sent_agent_list_response", map[string]interface{}{
+		"response": string(responseBytes),
+	})
+	// #endregion
+}
+
+func agentIDsCount(ids []string) int {
+	return len(ids)
 }
 
 // handleInitializeSession validates and confirms session start, responds to AGENT_RESPONSE_QUEUE

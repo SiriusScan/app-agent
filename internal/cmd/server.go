@@ -6,16 +6,14 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
 
-	"github.com/SiriusScan/app-agent/internal/agent"
 	"github.com/SiriusScan/app-agent/internal/apiclient"
-	"github.com/SiriusScan/app-agent/internal/commands/template"
 	"github.com/SiriusScan/app-agent/internal/config"
-	"github.com/SiriusScan/app-agent/internal/repository"
+	siriusbootstrap "github.com/SiriusScan/app-agent/internal/family/sirius/bootstrap"
+	"github.com/SiriusScan/app-agent/internal/family/sirius/connector"
 )
 
 // NewServerCommand creates the server command for agent mode.
@@ -69,62 +67,17 @@ Examples:
 					zap.String("required_env_vars", strings.Join(apiclient.ServiceAPIKeyEnvNames(), ", ")))
 			}
 
+			siriusbootstrap.LoadCompatibilityRuntime()
+
 			// Create a context with cancellation
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			// Create and connect the agent
-			a := agent.NewAgent(cfg, logger)
-
-			if err := a.Connect(ctx); err != nil {
+			runner := connector.NewRunner(cfg, logger)
+			if err := runner.Start(ctx); err != nil {
 				logger.Fatal("Failed to connect agent", zap.Error(err))
 			}
-			defer a.Close()
-
-			// Initialize repository integration with template sync
-			logger.Info("Initializing template synchronization")
-			repoIntegration := repository.NewRepositoryIntegration(logger)
-			if err := repoIntegration.Initialize(ctx, cfg.AgentID, cfg.ServerAddress); err != nil {
-				logger.Warn("Failed to initialize repository integration", zap.Error(err))
-			} else {
-				// Get the sync manager from repository integration
-				syncManager := repoIntegration.GetSyncManager()
-				if syncManager != nil {
-					// IMPORTANT: Set the gRPC stream reference so sync manager can communicate with server
-					syncManager.SetGRPCStream(a.GetStream())
-
-					// Use the agent's mutex-protected send to avoid concurrent stream.Send() races
-					syncManager.SetStreamSendFunc(a.StreamSend)
-
-					// Set sync manager on agent so it can handle template updates
-					a.SetSyncManager(syncManager)
-
-					// Register sync manager with template command for internal:template sync
-					template.SetGlobalSyncManager(syncManager)
-
-					logger.Info("Template synchronization initialized successfully")
-
-					// Trigger initial template sync from server on startup.
-					// Delayed slightly to let WaitForCommands start its receive loop
-					// and send the initial heartbeat first, avoiding concurrent Send() races.
-					go func() {
-						// Wait for the receive loop and initial heartbeat to complete
-						time.Sleep(3 * time.Second)
-
-						syncCtx, syncCancel := context.WithTimeout(ctx, 2*time.Minute)
-						defer syncCancel()
-
-						logger.Info("Requesting initial template sync from server")
-						if err := syncManager.SyncFromServer(syncCtx); err != nil {
-							logger.Warn("Initial template sync failed (will retry on next sync)", zap.Error(err))
-						} else {
-							logger.Info("Initial template sync request sent successfully")
-						}
-					}()
-				} else {
-					logger.Warn("Sync manager not available from repository integration")
-				}
-			}
+			defer runner.Stop()
 
 			// Handle termination signals
 			signalChan := make(chan os.Signal, 1)
@@ -134,7 +87,7 @@ Examples:
 			errChan := make(chan error, 1)
 			go func() {
 				logger.Info("Starting to listen for commands from server")
-				errChan <- a.WaitForCommands(ctx)
+				errChan <- <-runner.Errors()
 			}()
 
 			// Wait for either an error or a termination signal

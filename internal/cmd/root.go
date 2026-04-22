@@ -68,6 +68,7 @@ Examples:
 
 	// Add subcommand groups
 	rootCmd.AddCommand(NewTemplateCommand())
+	rootCmd.AddCommand(NewScanCommand())
 	rootCmd.AddCommand(NewModuleCommand())
 	rootCmd.AddCommand(NewServerCommand()) // Add server mode
 
