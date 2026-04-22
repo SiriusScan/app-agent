@@ -11,6 +11,7 @@ import (
 	valkey "github.com/valkey-io/valkey-go"
 	"go.uber.org/zap"
 
+	"github.com/SiriusScan/app-agent/internal/modules"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
 
@@ -495,18 +496,13 @@ func (s *ValKeyTemplateStorage) ValidateTemplate(template *types.Template, conte
 		return fmt.Errorf("invalid severity: %s", template.Info.Severity)
 	}
 
-	// Validate detection type
-	// NOTE: Types use underscores to match template YAML format (e.g., file_hash, not file-hash)
-	validTypes := map[string]bool{
-		"file_hash":    true,
-		"file_content": true,
-		"config_file":  true,
-		"registry":     true,
-		"version_cmd":  true,
-	}
 	detectionType := getDetectionType(template.Detection)
-	if !validTypes[detectionType] {
-		return fmt.Errorf("invalid detection type: %s", detectionType)
+	if !modules.IsKnownDetectionType(detectionType) {
+		return fmt.Errorf(
+			"invalid detection type: %s (known types: %v)",
+			detectionType,
+			modules.KnownDetectionTypeNames(),
+		)
 	}
 
 	return nil
