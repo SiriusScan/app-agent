@@ -14,12 +14,22 @@ const (
 	syncJobQueueName = "agent.template.sync.jobs"
 )
 
-// SyncJobMessage represents a sync job message from RabbitMQ
+// SyncJobMessage represents a sync job message from RabbitMQ.
+//
+// Action values:
+//   - "sync_repository"   - re-clone a single GitHub repository and broadcast.
+//   - "sync_all"          - re-sync every enabled repository and broadcast.
+//   - "delete_repository" - remove repository files + KV entries.
+//   - "notify_agents"     - tell connected agents to re-pull templates from
+//     Valkey. Used by sirius-api after writing a custom template envelope so
+//     the new template appears in agent inventories without requiring a full
+//     repository sync. TemplateID is informational (currently logged only).
 type SyncJobMessage struct {
 	Action           string `json:"action"`
 	RepositoryID     string `json:"repository_id,omitempty"`
 	RepositoryURL    string `json:"repository_url,omitempty"`
 	RepositoryBranch string `json:"repository_branch,omitempty"`
+	TemplateID       string `json:"template_id,omitempty"`
 	TriggeredBy      string `json:"triggered_by"`
 	Timestamp        string `json:"timestamp"`
 	JobID            string `json:"job_id"`
@@ -79,6 +89,9 @@ func (tsp *TemplateSyncQueueProcessor) StartListening() error {
 			case "delete_repository":
 				err = tsp.processDeleteRepository(processCtx, &syncMsg)
 
+			case "notify_agents":
+				err = tsp.processNotifyAgents(processCtx, &syncMsg)
+
 			default:
 				tsp.logger.Warn("Unknown sync action", zap.String("action", syncMsg.Action))
 				return
@@ -130,6 +143,19 @@ func (tsp *TemplateSyncQueueProcessor) processSyncAll(ctx context.Context, msg *
 		zap.String("job_id", msg.JobID))
 
 	return tsp.repositoryMgr.SyncAllRepositories(ctx)
+}
+
+// processNotifyAgents broadcasts a template-sync command to every connected
+// agent. Used after a producer (typically sirius-api) has written a new
+// custom template envelope to Valkey and needs agents to re-enumerate the
+// template:meta:* namespace without doing a full repository sync.
+func (tsp *TemplateSyncQueueProcessor) processNotifyAgents(ctx context.Context, msg *SyncJobMessage) error {
+	tsp.logger.Info("Processing notify_agents request",
+		zap.String("template_id", msg.TemplateID),
+		zap.String("triggered_by", msg.TriggeredBy),
+		zap.String("job_id", msg.JobID))
+	tsp.repositoryMgr.NotifyAgents(ctx)
+	return nil
 }
 
 // processDeleteRepository deletes a repository

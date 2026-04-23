@@ -387,6 +387,14 @@ func (rm *RepositoryManager) countRepositoryTemplates(ctx context.Context, repoI
 	return len(keys), nil
 }
 
+// NotifyAgents broadcasts an "internal:template sync" command to every
+// connected agent. Exported so external producers (e.g. the
+// agent.template.sync.jobs consumer) can trigger an agent-side template
+// re-pull without having to call the unexported helper.
+func (rm *RepositoryManager) NotifyAgents(ctx context.Context) {
+	rm.notifyAgents(ctx)
+}
+
 func (rm *RepositoryManager) notifyAgents(ctx context.Context) {
 	if rm.server == nil {
 		return

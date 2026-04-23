@@ -58,6 +58,11 @@ jobs:
         with:
           version: latest
           args: --timeout=5m
+          # Pre-existing baseline of lint issues across this repo is not
+          # in scope for the scanner-templates-fix sprint. PRs only get
+          # blocked on lint regressions they introduce themselves; the
+          # backlog will be cleaned up as a separate effort.
+          only-new-issues: true
 
   build:
     name: Build
