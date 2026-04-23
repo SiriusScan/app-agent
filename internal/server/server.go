@@ -115,8 +115,9 @@ type Server struct {
 	// Template management
 	templateManager    *ServerTemplateManager
 	repositoryManager  *RepositoryManager
-	syncQueueProcessor *TemplateSyncQueueProcessor
-	valkeyClient       valkey.Client
+	syncQueueProcessor    *TemplateSyncQueueProcessor
+	engineCommandConsumer *EngineCommandQueueProcessor
+	valkeyClient          valkey.Client
 
 	// KVStore for agent token authentication
 	kvStore goapistore.KVStore
@@ -208,6 +209,20 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 			logger.Error("Failed to start sync queue processor", zap.Error(err))
 		} else {
 			logger.Info("Template sync queue processor started")
+		}
+
+		// Defense-in-depth: also consume the legacy engine.commands queue
+		// so any producer that still publishes "internal:template upload"
+		// or "internal:template delete" there gets routed back into the
+		// notify-agents path. Strictly redundant with PR 3's canonical
+		// agent.template.sync.jobs flow when everything works; catches
+		// future drift without noise.
+		engineCmdConsumer := NewEngineCommandQueueProcessor(repositoryManager, logger)
+		server.engineCommandConsumer = engineCmdConsumer
+		if err := engineCmdConsumer.StartListening(); err != nil {
+			logger.Error("Failed to start engine.commands consumer", zap.Error(err))
+		} else {
+			logger.Info("engine.commands consumer started")
 		}
 
 		// Perform initial sync of all repositories
