@@ -13,6 +13,7 @@ import (
 
 	"github.com/SiriusScan/app-agent/internal/modules"
 	"github.com/SiriusScan/app-agent/internal/template/types"
+	sharedtemplates "github.com/SiriusScan/go-api/sirius/store/templates"
 )
 
 // ValKeyTemplateStorage manages template storage in ValKey
@@ -29,14 +30,16 @@ func NewValKeyTemplateStorage(client valkey.Client, logger *zap.Logger) *ValKeyT
 	}
 }
 
-// Template storage key constants
+// Template storage key constants. Source of truth lives in the shared
+// go-api/sirius/store/templates package; we re-export them here for
+// backwards compatibility with existing call sites.
 const (
-	TemplateManifestKey     = "template:manifest"
-	TemplateRepoManifestKey = "template:repo-manifest"
-	TemplateStandardPrefix  = "template:standard:"
-	TemplateCustomPrefix    = "template:custom:"
-	TemplateMetaPrefix      = "template:meta:"
-	TemplateVersionPrefix   = "template:version:"
+	TemplateManifestKey     = sharedtemplates.KeyAgentTemplateManifest
+	TemplateRepoManifestKey = sharedtemplates.KeyAgentTemplateRepoManifest
+	TemplateStandardPrefix  = sharedtemplates.KeyAgentTemplateStandardPrefix
+	TemplateCustomPrefix    = sharedtemplates.KeyAgentTemplateCustomPrefix
+	TemplateMetaPrefix      = sharedtemplates.KeyAgentTemplateMetaPrefix
+	TemplateVersionPrefix   = sharedtemplates.KeyAgentTemplateVersionPrefix
 )
 
 // TemplateManifest represents the global template manifest
@@ -58,23 +61,12 @@ type TemplateStatistics struct {
 	BySeverity        map[string]int `json:"by_severity"`
 }
 
-// TemplateInfo represents template information stored in ValKey
-type TemplateInfo struct {
-	ID               string            `json:"id"`
-	Version          string            `json:"version"`
-	Checksum         string            `json:"checksum"`
-	Size             int64             `json:"size"`
-	Severity         string            `json:"severity"`
-	Platforms        []string          `json:"platforms"`
-	DetectionType    string            `json:"detection_type"`
-	Author           string            `json:"author"`
-	Created          time.Time         `json:"created"`
-	Updated          time.Time         `json:"updated"`
-	VulnerabilityIDs []string          `json:"vulnerability_ids"`
-	IsCustom         bool              `json:"is_custom"`
-	Content          []byte            `json:"content,omitempty"`
-	Metadata         map[string]string `json:"metadata,omitempty"`
-}
+// TemplateInfo aliases the shared TemplateRecord so this package and
+// every external producer (sirius-api uploads, future tooling) speak
+// the same wire shape. Existing call sites keep using the local name;
+// the shared definition lives in
+// github.com/SiriusScan/go-api/sirius/store/templates.
+type TemplateInfo = sharedtemplates.TemplateRecord
 
 // StoreTemplate stores a template in ValKey with optional repository ID
 func (s *ValKeyTemplateStorage) StoreTemplate(ctx context.Context, template *types.Template, content []byte, isCustom bool, repositoryID ...string) error {
