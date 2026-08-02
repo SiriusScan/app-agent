@@ -37,6 +37,8 @@ type Agent struct {
 
 	// Auth token for gRPC authentication
 	authToken string
+	// Enrollment API key — sent only on first connect; cleared after welcome.
+	enrollAPIKey string
 }
 
 // NewAgent creates a new HelloService client (agent)
@@ -52,6 +54,7 @@ func NewAgent(cfg *config.AgentConfig, logger *zap.Logger) *Agent {
 		scriptingEnabled: runtimeCtx.ScriptingEnabled,
 		agentInfo:        runtimeCtx.AgentInfo,
 		authToken:        cfg.AuthToken,
+		enrollAPIKey:     cfg.EnrollAPIKey,
 	}
 }
 
@@ -174,6 +177,9 @@ func (a *Agent) WaitForCommands(ctx context.Context) error {
 			a.logger.Warn("Failed to persist auth token to file (will retry next connect)",
 				zap.Error(err))
 		}
+		// Enrollment key is only needed for first connect; drop from memory.
+		a.enrollAPIKey = ""
+		a.config.EnrollAPIKey = ""
 	}
 	// #region agent log
 	debugtrace.Log("pre-fix", "H1,H3,H5", "internal/agent/agent.go:170", "welcome_received", map[string]interface{}{
@@ -252,10 +258,15 @@ func (a *Agent) sendAuthenticatedHeartbeat(ctx context.Context) error {
 		},
 		AuthToken: a.authToken, // Empty on first-ever connection; populated on reconnects.
 	}
+	// Present enroll API key only when we have no auth token yet (first enrollment).
+	if a.authToken == "" && a.enrollAPIKey != "" {
+		msg.ApiKey = a.enrollAPIKey
+	}
 
 	a.logger.Info("Sending authenticated initial heartbeat",
 		zap.String("agent_id", a.config.AgentID),
-		zap.Bool("has_token", a.authToken != ""))
+		zap.Bool("has_token", a.authToken != ""),
+		zap.Bool("has_enroll_key", msg.ApiKey != ""))
 
 	return a.StreamSend(msg)
 }

@@ -62,6 +62,8 @@ message AgentMessage {
   // Authentication token presented by the agent on every message.
   // Empty on the very first connection; populated after the server issues a token.
   string auth_token = 6;
+  // Student/admin API key used only for first-time enrollment (when auth_token is empty).
+  string api_key = 7;
 }
 
 // ServerMessage is sent from the server to the agent

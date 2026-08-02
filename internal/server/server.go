@@ -284,33 +284,65 @@ func (s *Server) ConnectStream(stream pb.HelloService_ConnectStreamServer) error
 	// ── Agent token authentication ───────────────────────────────────────────
 	var issuedToken string
 	if s.kvStore != nil {
+		ctxAuth := context.Background()
 		suppliedToken := msg.GetAuthToken()
 		if suppliedToken == "" {
 			// First connection — check if a token already exists for this agent.
-			if goapistore.HasAgentToken(context.Background(), s.kvStore, agentID) {
+			if goapistore.HasAgentToken(ctxAuth, s.kvStore, agentID) {
 				// Token exists but agent didn't supply it — reject.
 				s.logger.Warn("Agent connected without token but a token exists – rejecting",
 					zap.String("agent_id", agentID))
 				return fmt.Errorf("agent %s must present auth_token", agentID)
 			}
-			// Brand-new agent — generate and store a token.
+			// Brand-new agent — require API key for enrollment, pin owner on token.
+			apiKey := msg.GetApiKey()
+			if apiKey == "" {
+				s.logger.Warn("Agent enroll rejected: missing api_key",
+					zap.String("agent_id", agentID))
+				return fmt.Errorf("agent %s must present api_key for first enrollment", agentID)
+			}
+			keyMeta, err := goapistore.ValidateAPIKey(ctxAuth, s.kvStore, apiKey)
+			if err != nil {
+				s.logger.Warn("Agent enroll rejected: invalid api_key",
+					zap.String("agent_id", agentID), zap.Error(err))
+				return fmt.Errorf("agent %s enroll api_key invalid: %w", agentID, err)
+			}
+			if !goapistore.HasScope(keyMeta, goapistore.ScopeAgentEnroll) {
+				s.logger.Warn("Agent enroll rejected: api_key lacks agent:enroll scope",
+					zap.String("agent_id", agentID), zap.String("key_id", keyMeta.ID))
+				return fmt.Errorf("agent %s enroll api_key lacks %s scope", agentID, goapistore.ScopeAgentEnroll)
+			}
 			newToken, err := goapistore.GenerateAgentToken()
 			if err != nil {
 				s.logger.Error("Failed to generate agent token", zap.Error(err))
 				return fmt.Errorf("failed to generate agent token: %w", err)
 			}
-			if err := goapistore.StoreAgentToken(context.Background(), s.kvStore, agentID, newToken); err != nil {
+			// Empty OwnerSubjectID on legacy keys is allowed (admin/legacy enroll).
+			if err := goapistore.StoreAgentTokenOwned(ctxAuth, s.kvStore, agentID, newToken, keyMeta.OwnerSubjectID, keyMeta.ID); err != nil {
 				s.logger.Error("Failed to store agent token", zap.Error(err))
 				return fmt.Errorf("failed to store agent token: %w", err)
 			}
 			issuedToken = newToken
-			s.logger.Info("Issued new auth token to agent", zap.String("agent_id", agentID))
+			s.logger.Info("Issued new auth token to agent",
+				zap.String("agent_id", agentID),
+				zap.String("owner_subject_id", keyMeta.OwnerSubjectID),
+				zap.String("enrolling_key_id", keyMeta.ID))
 		} else {
 			// Returning agent — validate the supplied token.
-			if _, err := goapistore.ValidateAgentToken(context.Background(), s.kvStore, agentID, suppliedToken); err != nil {
+			tokenMeta, err := goapistore.ValidateAgentToken(ctxAuth, s.kvStore, agentID, suppliedToken)
+			if err != nil {
 				s.logger.Warn("Agent token validation failed",
 					zap.String("agent_id", agentID), zap.Error(err))
 				return fmt.Errorf("agent token validation failed: %w", err)
+			}
+			// If enrolled via API key, reject reconnect when that key was revoked.
+			if tokenMeta.EnrollingKeyID != "" {
+				if _, err := goapistore.GetAPIKeyMeta(ctxAuth, s.kvStore, tokenMeta.EnrollingKeyID); err != nil {
+					s.logger.Warn("Agent reconnect rejected: enrolling API key revoked",
+						zap.String("agent_id", agentID),
+						zap.String("enrolling_key_id", tokenMeta.EnrollingKeyID))
+					return fmt.Errorf("agent %s enrolling API key revoked", agentID)
+				}
 			}
 			s.logger.Info("Agent authenticated successfully", zap.String("agent_id", agentID))
 		}
@@ -1060,6 +1092,7 @@ func (s *Server) Stop() {
 
 // syncConnectedAgentsToValKey writes the current list of connected agent IDs to ValKey
 // so that the frontend can discover agents without going through RabbitMQ.
+// Also maintains per-owner sets at agents:connected:<ownerSubjectID> for student isolation.
 func (s *Server) syncConnectedAgentsToValKey() {
 	if s.valkeyClient == nil {
 		return
@@ -1076,6 +1109,27 @@ func (s *Server) syncConnectedAgentsToValKey() {
 	cmd := s.valkeyClient.B().Set().Key("connected_agents").Value(string(agentsJSON)).Ex(120 * time.Second).Build()
 	if err := s.valkeyClient.Do(ctx, cmd).Error(); err != nil {
 		s.logger.Warn("Failed to sync connected agents to ValKey", zap.Error(err))
+	}
+
+	// Owner-scoped lists (class multi-user isolation).
+	byOwner := make(map[string][]string)
+	if s.kvStore != nil {
+		for _, id := range agentIDs {
+			meta, err := goapistore.GetAgentToken(ctx, s.kvStore, id)
+			if err != nil || meta.OwnerSubjectID == "" {
+				continue
+			}
+			byOwner[meta.OwnerSubjectID] = append(byOwner[meta.OwnerSubjectID], id)
+		}
+	}
+	for owner, ids := range byOwner {
+		ownerJSON, _ := json.Marshal(ids)
+		ownerKey := goapistore.ConnectedAgentsKey(owner)
+		ownerCmd := s.valkeyClient.B().Set().Key(ownerKey).Value(string(ownerJSON)).Ex(120 * time.Second).Build()
+		if err := s.valkeyClient.Do(ctx, ownerCmd).Error(); err != nil {
+			s.logger.Warn("Failed to sync owner connected agents to ValKey",
+				zap.String("owner_subject_id", owner), zap.Error(err))
+		}
 	}
 }
 

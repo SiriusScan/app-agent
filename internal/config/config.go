@@ -24,6 +24,7 @@ type AgentConfig struct {
 	EnableScripting bool   // Whether to enable PowerShell scripting
 	AuthToken       string // Persisted authentication token for gRPC auth
 	TokenFilePath   string // File path where the auth token is stored
+	EnrollAPIKey    string // API key used only for first-time enrollment (not persisted)
 }
 
 // LoadServerConfig loads server configuration from environment variables
@@ -120,6 +121,12 @@ func LoadAgentConfig() *AgentConfig {
 		authToken = loadTokenFromFile(tokenFilePath)
 	}
 
+	// Enrollment API key — used only on first connect when no auth token exists.
+	enrollKey := os.Getenv("SIRIUS_AGENT_ENROLL_KEY")
+	if enrollKey == "" {
+		enrollKey = os.Getenv("AGENT_ENROLL_KEY")
+	}
+
 	return &AgentConfig{
 		ServerAddress:   serverAddr,
 		AgentID:         agentID,
@@ -129,6 +136,7 @@ func LoadAgentConfig() *AgentConfig {
 		EnableScripting: enableScripting,
 		AuthToken:       authToken,
 		TokenFilePath:   tokenFilePath,
+		EnrollAPIKey:    enrollKey,
 	}
 }
 

@@ -4,6 +4,8 @@ go 1.24.0
 
 toolchain go1.24.1
 
+replace github.com/SiriusScan/go-api => ../go-api
+
 require (
 	github.com/SiriusScan/go-api v0.0.18
 	github.com/olekukonko/tablewriter v0.0.5
