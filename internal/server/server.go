@@ -513,7 +513,7 @@ func (s *Server) handleCommandResult(agentID string, result *pb.CommandResult) {
 
 	// Check if this is a coordinated scan result (contains --scan-id)
 	if scanID := extractScanID(result.Command); scanID != "" {
-		s.logger.Info("Coordinated scan result detected, merging into currentScan",
+		s.logger.Info("Coordinated scan result detected, merging into owned scan state",
 			zap.String("scan_id", scanID),
 			zap.String("agent_id", agentID))
 		go s.mergeAgentScanResults(agentID, scanID, result)
@@ -1501,7 +1501,108 @@ func appendAgentVulnerabilitiesDeduped(
 	return existing, added
 }
 
-// mergeAgentScanResults merges agent scan results into the unified currentScan ValKey key
+// ownedScanStateKey is the multi-user Scanner workspace key (UI source of truth).
+func ownedScanStateKey(scanID string) string {
+	return "scan:state:" + scanID
+}
+
+func ownedScanStatusKey(scanID string) string {
+	return "scan:status:" + scanID
+}
+
+// loadScanResultForMerge prefers scan:state:<id> (owned workspace), then falls
+// back to legacy currentScan when that document's id matches.
+func (s *Server) loadScanResultForMerge(ctx context.Context, scanID string) (goapistore.ScanResult, string, error) {
+	tryKey := func(key string) (goapistore.ScanResult, error) {
+		var empty goapistore.ScanResult
+		resp := s.valkeyClient.Do(ctx, s.valkeyClient.B().Get().Key(key).Build())
+		if resp.Error() != nil {
+			return empty, resp.Error()
+		}
+		encoded, err := resp.ToString()
+		if err != nil {
+			return empty, err
+		}
+		decodedBytes, decErr := base64Decode(encoded)
+		if decErr != nil {
+			return empty, decErr
+		}
+		var scanResult goapistore.ScanResult
+		if err := json.Unmarshal(decodedBytes, &scanResult); err != nil {
+			return empty, err
+		}
+		return scanResult, nil
+	}
+
+	stateKey := ownedScanStateKey(scanID)
+	if scanResult, err := tryKey(stateKey); err == nil {
+		if scanResult.ID != "" && scanResult.ID != scanID {
+			return goapistore.ScanResult{}, "", fmt.Errorf("scan id mismatch in %s: got %s want %s", stateKey, scanResult.ID, scanID)
+		}
+		if scanResult.ID == "" {
+			scanResult.ID = scanID
+		}
+		return scanResult, stateKey, nil
+	}
+
+	// Legacy admin path: results used to merge only into currentScan.
+	scanResult, err := tryKey("currentScan")
+	if err != nil {
+		return goapistore.ScanResult{}, "", fmt.Errorf("read scan:state and currentScan failed: %w", err)
+	}
+	if scanResult.ID != scanID {
+		return goapistore.ScanResult{}, "", fmt.Errorf("scan id mismatch in currentScan: got %s want %s", scanResult.ID, scanID)
+	}
+	return scanResult, "currentScan", nil
+}
+
+func (s *Server) persistMergedScanResult(ctx context.Context, scanID string, scanResult goapistore.ScanResult) error {
+	updatedJSON, err := json.Marshal(scanResult)
+	if err != nil {
+		return fmt.Errorf("marshal scan result: %w", err)
+	}
+	encodedStr := base64Encode(updatedJSON)
+
+	stateKey := ownedScanStateKey(scanID)
+	if err := s.valkeyClient.Do(ctx, s.valkeyClient.B().Set().Key(stateKey).Value(encodedStr).Build()).Error(); err != nil {
+		return fmt.Errorf("write %s: %w", stateKey, err)
+	}
+
+	status := scanResult.Status
+	if status == "" {
+		status = "running"
+	}
+	if err := s.valkeyClient.Do(ctx, s.valkeyClient.B().Set().Key(ownedScanStatusKey(scanID)).Value(status).Build()).Error(); err != nil {
+		s.logger.Warn("Failed to write scan:status key",
+			zap.String("scan_id", scanID),
+			zap.Error(err))
+	}
+
+	// Keep admin/Community currentScan mirrored when it is this scan (or absent).
+	curResp := s.valkeyClient.Do(ctx, s.valkeyClient.B().Get().Key("currentScan").Build())
+	mirror := true
+	if curResp.Error() == nil {
+		if encoded, err := curResp.ToString(); err == nil {
+			if decoded, decErr := base64Decode(encoded); decErr == nil {
+				var existing goapistore.ScanResult
+				if json.Unmarshal(decoded, &existing) == nil && existing.ID != "" && existing.ID != scanID {
+					mirror = false
+				}
+			}
+		}
+	}
+	if mirror {
+		if err := s.valkeyClient.Do(ctx, s.valkeyClient.B().Set().Key("currentScan").Value(encodedStr).Build()).Error(); err != nil {
+			s.logger.Warn("Failed to mirror merged scan into currentScan",
+				zap.String("scan_id", scanID),
+				zap.Error(err))
+		}
+	}
+	return nil
+}
+
+// mergeAgentScanResults merges agent scan results into scan:state:<scanId>
+// (UI source of truth) and mirrors currentScan for admin/Community compat.
 func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.CommandResult) {
 	if s.valkeyClient == nil {
 		s.logger.Warn("Cannot merge agent scan results: ValKey client not available")
@@ -1511,7 +1612,7 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Parse the agent's scan output FIRST (before reading currentScan)
+	// Parse the agent's scan output FIRST (before reading scan state)
 	// The output is JSON from the template scan command
 	var agentOutput AgentScanOutputEntry
 	var matchedVulns []goapistore.VulnerabilitySummary
@@ -1592,46 +1693,16 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 			zap.String("agent_hostname", agentHostname))
 	}
 
-	// Read current scan state from ValKey
-	getCmd := s.valkeyClient.B().Get().Key("currentScan").Build()
-	resp := s.valkeyClient.Do(ctx, getCmd)
-
-	if resp.Error() != nil {
-		s.logger.Error("Failed to read currentScan from ValKey",
-			zap.Error(resp.Error()))
-		return
-	}
-
-	encoded, err := resp.ToString()
+	scanResult, sourceKey, err := s.loadScanResultForMerge(ctx, scanID)
 	if err != nil {
-		s.logger.Error("Failed to convert currentScan to string",
+		s.logger.Error("Failed to load scan state for agent merge",
+			zap.String("scan_id", scanID),
 			zap.Error(err))
 		return
 	}
-
-	// The currentScan value is base64-encoded JSON
-	// We need to decode, modify, and re-encode
-	decodedBytes, decErr := base64Decode(encoded)
-	if decErr != nil {
-		s.logger.Error("Failed to decode currentScan base64",
-			zap.Error(decErr))
-		return
-	}
-
-	var scanResult goapistore.ScanResult
-	if err := json.Unmarshal(decodedBytes, &scanResult); err != nil {
-		s.logger.Error("Failed to unmarshal currentScan",
-			zap.Error(err))
-		return
-	}
-
-	// Only merge if scan IDs match
-	if scanResult.ID != scanID {
-		s.logger.Warn("Scan ID mismatch, skipping merge",
-			zap.String("current_scan_id", scanResult.ID),
-			zap.String("agent_scan_id", scanID))
-		return
-	}
+	s.logger.Info("Loaded scan state for agent merge",
+		zap.String("scan_id", scanID),
+		zap.String("source_key", sourceKey))
 
 	// Resolve concrete host IP before mutating sub-scan status or host rows
 	hostIP := s.resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP, &scanResult)
@@ -1809,24 +1880,17 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 				zap.Int("total_vulns", len(scanResult.Vulnerabilities)))
 		}
 	} else if len(matchedVulns) > 0 && result.ExitCode == 0 {
-		s.logger.Warn("Agent reported vulnerabilities but host IP could not be resolved; not appending to currentScan",
+		s.logger.Warn("Agent reported vulnerabilities but host IP could not be resolved; not appending to scan state",
 			zap.String("agent_id", agentID),
 			zap.String("scan_id", scanID),
 			zap.Int("skipped_vulns", len(matchedVulns)))
 	}
 
-	// Write back to ValKey
-	updatedJSON, err := json.Marshal(scanResult)
-	if err != nil {
-		s.logger.Error("Failed to marshal updated currentScan",
-			zap.Error(err))
-		return
-	}
+	scanResult.HostsCompleted = len(scanResult.Hosts)
 
-	encodedStr := base64Encode(updatedJSON)
-	setCmd := s.valkeyClient.B().Set().Key("currentScan").Value(encodedStr).Build()
-	if err := s.valkeyClient.Do(ctx, setCmd).Error(); err != nil {
-		s.logger.Error("Failed to write updated currentScan to ValKey",
+	if err := s.persistMergedScanResult(ctx, scanID, scanResult); err != nil {
+		s.logger.Error("Failed to persist merged agent scan results",
+			zap.String("scan_id", scanID),
 			zap.Error(err))
 		return
 	}
@@ -1834,9 +1898,10 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 	// Also update the agent_scan:{scanID} status key
 	s.updateAgentScanStatus(ctx, scanID, agentID, result)
 
-	s.logger.Info("Successfully merged agent scan results into currentScan",
+	s.logger.Info("Successfully merged agent scan results into owned scan state",
 		zap.String("scan_id", scanID),
 		zap.String("agent_id", agentID),
+		zap.String("status", scanResult.Status),
 		zap.Int("vulnerabilities_added", vulnsAdded),
 		zap.String("host_ip", hostIP))
 }
