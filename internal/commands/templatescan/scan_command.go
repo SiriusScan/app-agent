@@ -56,7 +56,14 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 	var templates []*types.Template
 	var discoveryErrors []error
 
-	if config.TemplatePath != "" {
+	if config.TemplateID != "" {
+		template, err := loadTemplateByID(ctx, agentInfo.Logger, config.TemplateID)
+		if err != nil {
+			return "", err
+		}
+		templates = []*types.Template{template}
+		agentInfo.Logger.Info("Running single template by ID", zap.String("template_id", config.TemplateID))
+	} else if config.TemplatePath != "" {
 		// Single template (explicit file path)
 		template, err := parser.ParseTemplate(config.TemplatePath)
 		if err != nil {
@@ -166,6 +173,23 @@ func (c *ScanCommand) Execute(ctx context.Context, agentInfo commands.AgentInfo,
 	return outputStr, nil
 }
 
+// loadTemplateByID uses the same source precedence as normal discovery, but
+// fails closed for a missing ID. It must never fall back to an all-template scan.
+func loadTemplateByID(ctx context.Context, logger *zap.Logger, id string) (*types.Template, error) {
+	manager, err := storage.NewManager(logger)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize template manager: %w", err)
+	}
+	template, err := manager.GetTemplate(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load template ID %q: %w", id, err)
+	}
+	if err := parser.ValidateTemplate(template); err != nil {
+		return nil, fmt.Errorf("template ID %q is invalid: %w", id, err)
+	}
+	return template, nil
+}
+
 // parseArgs parses command arguments
 func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 	config := &ScanConfig{
@@ -178,6 +202,7 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 		return config, nil
 	}
 
+	allRequested := false
 	parts := strings.Fields(args)
 	for i := 0; i < len(parts); i++ {
 		switch parts[i] {
@@ -188,6 +213,16 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 			i++
 			config.Directory = parts[i]
 
+		case "--template-id":
+			if config.TemplateID != "" {
+				return nil, fmt.Errorf("--template-id may only be specified once")
+			}
+			if i+1 >= len(parts) || strings.HasPrefix(parts[i+1], "--") {
+				return nil, fmt.Errorf("--template-id requires a value")
+			}
+			i++
+			config.TemplateID = parts[i]
+
 		case "--template", "-t":
 			if i+1 >= len(parts) {
 				return nil, fmt.Errorf("--template requires a value")
@@ -196,6 +231,7 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 			config.TemplatePath = parts[i]
 
 		case "--all":
+			allRequested = true
 			// --all flag: use template manager (leave Directory empty)
 			// This triggers the template manager code path which discovers
 			// templates from all sources: custom > server > builtin
@@ -246,7 +282,15 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 
 		default:
 			// Check for --key=value format
-			if strings.HasPrefix(parts[i], "--scan-id=") {
+			if strings.HasPrefix(parts[i], "--template-id=") {
+				if config.TemplateID != "" {
+					return nil, fmt.Errorf("--template-id may only be specified once")
+				}
+				config.TemplateID = strings.TrimPrefix(parts[i], "--template-id=")
+				if config.TemplateID == "" {
+					return nil, fmt.Errorf("--template-id requires a value")
+				}
+			} else if strings.HasPrefix(parts[i], "--scan-id=") {
 				config.ScanID = strings.TrimPrefix(parts[i], "--scan-id=")
 			} else if strings.HasPrefix(parts[i], "--workers=") {
 				w, err := strconv.Atoi(strings.TrimPrefix(parts[i], "--workers="))
@@ -266,6 +310,10 @@ func (c *ScanCommand) parseArgs(args string) (*ScanConfig, error) {
 				return nil, fmt.Errorf("unknown argument: %s", parts[i])
 			}
 		}
+	}
+
+	if config.TemplateID != "" && (config.TemplatePath != "" || config.Directory != "" || allRequested) {
+		return nil, fmt.Errorf("--template-id cannot be combined with --template, --directory, or --all")
 	}
 
 	// Validate that template and directory are not both set
@@ -300,6 +348,7 @@ func (c *ScanCommand) generateOutput(
 
 // ScanConfig holds configuration for the scan command
 type ScanConfig struct {
+	TemplateID     string // Exact template ID resolved through the storage manager
 	Directory      string
 	TemplatePath   string
 	Workers        int

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/debugtrace"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 
 	pb "github.com/SiriusScan/app-agent/proto/hello"
@@ -26,11 +26,18 @@ func newGRPCTransport(logger *zap.Logger) *grpcTransport {
 	return &grpcTransport{logger: logger}
 }
 
-func (t *grpcTransport) Connect(address string) error {
-	conn, err := grpc.NewClient(
-		address,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+func (t *grpcTransport) Connect(cfg *config.AgentConfig) error {
+	creds, err := cfg.GRPCTransportCredentials()
+	if err != nil {
+		return fmt.Errorf("invalid gRPC transport configuration: %w", err)
+	}
+	opts := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	if creds.Info().SecurityProtocol == "insecure" {
+		t.logger.Warn("Using plaintext gRPC on loopback for local development; server identity is not verified")
+		// Do not let proxy environment settings route the local exception off-host.
+		opts = append(opts, grpc.WithNoProxy())
+	}
+	conn, err := grpc.NewClient(cfg.ServerAddress, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to connect to server: %w", err)
 	}

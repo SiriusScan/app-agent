@@ -60,13 +60,16 @@ Run a single template against the local system:
 
 ### Server Mode (Default)
 
-Connect to a Sirius server for centralized management:
+Connect to a Sirius server for centralized management. gRPC uses authenticated
+TLS by default. Configure the server certificate/key and, for a private CA, the
+agent trust bundle before connecting. See [gRPC TLS setup and upgrade guide](documentation/grpc-tls.md).
 
 ```bash
 # 1) Verify binary
 ./sirius-agent version
 
-# 2) Start with defaults (SERVER_ADDRESS defaults to localhost:50051)
+# 2) Connect to a TLS server (SERVER_ADDRESS defaults to localhost:50051)
+# For a private CA, first set GRPC_TLS_CA_FILE to its trusted public PEM bundle.
 ./sirius-agent
 
 # 3) Optional: override via environment
@@ -148,6 +151,11 @@ See [documentation/README.template-architect-guide.md](documentation/README.temp
 | Environment Variable | Description                                                                    | Default                       |
 | -------------------- | ------------------------------------------------------------------------------ | ----------------------------- |
 | `SERVER_ADDRESS`     | Agent gRPC server address (agent mode) / server bind address (server process) | `localhost:50051` or `:50051` |
+| `GRPC_TRANSPORT` | gRPC transport: `tls` or explicit local-only `insecure-loopback` | `tls` |
+| `GRPC_TLS_CERT_FILE` | Server PEM certificate chain | required for server |
+| `GRPC_TLS_KEY_FILE` | Server PEM private key | required for server |
+| `GRPC_TLS_CA_FILE` | Agent CA bundle, replacing OS roots when set | OS trust roots |
+| `GRPC_TLS_SERVER_NAME` | Expected server certificate DNS name override | server address hostname/IP |
 | `AGENT_ID`           | Unique agent identifier                                                        | hostname                      |
 | `HOST_ID`            | Host record identifier                                                         | `AGENT_ID`                    |
 | `API_BASE_URL`       | Backend REST API URL                                                           | `http://<host>:9001`          |
