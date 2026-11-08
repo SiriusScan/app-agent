@@ -84,8 +84,13 @@ func ConvertTemplateResultsToVulnerabilities(results []*types.Result) []sirius.V
 
 // BuildHostData constructs a sirius.Host from fingerprint and vulnerabilities.
 func BuildHostData(fp *fingerprint.HostFingerprint, vulns []sirius.Vulnerability) sirius.Host {
+	hostID := fp.HostID
+	if hostID == "" {
+		// Preserve callers constructing older fingerprints without HostID.
+		hostID = fp.AgentID
+	}
 	return sirius.Host{
-		HID:             fp.AgentID,         // Use agent ID as host ID
+		HID:             hostID,             // Use the configured backend host identity
 		OS:              fp.OS,              // Operating system
 		OSVersion:       fp.OSVersion,       // OS version
 		IP:              fp.PrimaryIP,       // Primary IP address
