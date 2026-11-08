@@ -59,10 +59,11 @@ func NewAgent(cfg *config.AgentConfig, logger *zap.Logger) *Agent {
 func (a *Agent) Connect(ctx context.Context) error {
 	a.logger.Info("Connecting to server", zap.String("address", a.config.ServerAddress))
 
-	if err := a.transport.Connect(a.config.ServerAddress); err != nil {
+	if err := a.transport.Connect(a.config); err != nil {
 		return err
 	}
-	a.logger.Info("Connected to server successfully")
+	// grpc.NewClient is lazy; the TLS handshake happens when OpenStream runs.
+	a.logger.Info("Server transport configured")
 
 	// --- Start Stream with Metadata ---
 	a.logger.Info("Opening bidirectional stream with server")

@@ -22,8 +22,8 @@ import (
 	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/store"
 	pb "github.com/SiriusScan/app-agent/proto/hello"
-	goapistore "github.com/SiriusScan/go-api/sirius/store"
 	"github.com/SiriusScan/go-api/sirius/queue"
+	goapistore "github.com/SiriusScan/go-api/sirius/store"
 	// "github.com/sirius-project/app-agent/internal/valkey" // Commented out due to import error
 )
 
@@ -65,6 +65,8 @@ type CommandMessage struct {
 		ID   string `json:"id"`
 	} `json:"target,omitempty"`
 	ResponseQueue string `json:"responseQueue,omitempty"`
+	CorrelationID string `json:"correlationId,omitempty"`
+	NoReply       bool   `json:"noReply,omitempty"`
 }
 
 // Response structure
@@ -104,6 +106,8 @@ type Server struct {
 	// Queue processing
 	queueCtx    context.Context
 	queueCancel context.CancelFunc
+	// Optional per-server reply transport for isolated command-routing tests.
+	commandReplyPublisher func(queueName, message string, private bool) error
 
 	// Response storage
 	responseStore store.ResponseStore
@@ -113,18 +117,25 @@ type Server struct {
 	pendingCommands      map[string]string // Key: agentID:commandString, Value: agentID:timestampID
 
 	// Template management
-	templateManager    *ServerTemplateManager
-	repositoryManager  *RepositoryManager
+	templateManager       *ServerTemplateManager
+	repositoryManager     *RepositoryManager
 	syncQueueProcessor    *TemplateSyncQueueProcessor
 	engineCommandConsumer *EngineCommandQueueProcessor
 	valkeyClient          valkey.Client
 
 	// KVStore for agent token authentication
 	kvStore goapistore.KVStore
+	// Optional per-server generator for deterministic enrollment tests.
+	agentTokenGenerator func() (string, error)
 }
 
 // NewServer creates a new HelloService server
 func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
+	// Reject invalid transport settings before opening files or starting external services.
+	if _, err := cfg.GRPCTransportCredentials(); err != nil {
+		return nil, fmt.Errorf("invalid gRPC transport configuration: %w", err)
+	}
+
 	// Create a log file for command output
 	logFile, err := os.OpenFile("server_commands.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
@@ -153,7 +164,7 @@ func NewServer(cfg *config.ServerConfig, logger *zap.Logger) (*Server, error) {
 	// Initialize go-api KVStore for agent token auth
 	kvStore, err := goapistore.NewValkeyStore()
 	if err != nil {
-		logger.Warn("Failed to create KVStore for agent auth, token auth will be unavailable",
+		logger.Warn("Failed to create KVStore for agent auth, agent streams will be rejected",
 			zap.Error(err))
 	}
 
@@ -281,39 +292,11 @@ func (s *Server) ConnectStream(stream pb.HelloService_ConnectStreamServer) error
 	s.logger.Info("Agent connected to stream", zap.String("agent_id", agentID))
 	fmt.Printf("Agent connected to stream: %s\n", agentID)
 
-	// ── Agent token authentication ───────────────────────────────────────────
-	var issuedToken string
-	if s.kvStore != nil {
-		suppliedToken := msg.GetAuthToken()
-		if suppliedToken == "" {
-			// First connection — check if a token already exists for this agent.
-			if goapistore.HasAgentToken(context.Background(), s.kvStore, agentID) {
-				// Token exists but agent didn't supply it — reject.
-				s.logger.Warn("Agent connected without token but a token exists – rejecting",
-					zap.String("agent_id", agentID))
-				return fmt.Errorf("agent %s must present auth_token", agentID)
-			}
-			// Brand-new agent — generate and store a token.
-			newToken, err := goapistore.GenerateAgentToken()
-			if err != nil {
-				s.logger.Error("Failed to generate agent token", zap.Error(err))
-				return fmt.Errorf("failed to generate agent token: %w", err)
-			}
-			if err := goapistore.StoreAgentToken(context.Background(), s.kvStore, agentID, newToken); err != nil {
-				s.logger.Error("Failed to store agent token", zap.Error(err))
-				return fmt.Errorf("failed to store agent token: %w", err)
-			}
-			issuedToken = newToken
-			s.logger.Info("Issued new auth token to agent", zap.String("agent_id", agentID))
-		} else {
-			// Returning agent — validate the supplied token.
-			if _, err := goapistore.ValidateAgentToken(context.Background(), s.kvStore, agentID, suppliedToken); err != nil {
-				s.logger.Warn("Agent token validation failed",
-					zap.String("agent_id", agentID), zap.Error(err))
-				return fmt.Errorf("agent token validation failed: %w", err)
-			}
-			s.logger.Info("Agent authenticated successfully", zap.String("agent_id", agentID))
-		}
+	// Authentication must succeed before the stream is registered or welcomed.
+	issuedToken, err := s.authenticateAgent(stream.Context(), agentID, msg.GetAuthToken())
+	if err != nil {
+		s.logger.Warn("Agent token authentication failed", zap.String("agent_id", agentID), zap.Error(err))
+		return fmt.Errorf("agent token authentication failed: %w", err)
 	}
 
 	// Register the agent
@@ -672,46 +655,13 @@ func (s *Server) StartQueueProcessor(ctx context.Context) {
 	s.queueCtx, s.queueCancel = context.WithCancel(ctx)
 
 	go func() {
-		processor := func(msg string) {
-			s.logger.Info("Received message on agent queue", zap.String("message", msg))
-			// #region agent log
-			debugtrace.Log("ui-pre-fix", "H6,H9", "internal/server/server.go:661", "server_agent_queue_received", map[string]interface{}{
-				"message": msg,
-			})
-			// #endregion
-			var cmdMsg CommandMessage
-			if err := json.Unmarshal([]byte(msg), &cmdMsg); err != nil {
-				s.logger.Error("Failed to unmarshal command message", zap.Error(err), zap.String("message", msg))
-				s.sendErrorResponse(AGENT_RESPONSE_QUEUE, "Invalid command format")
-				return
-			}
-
-			// Added log to check parsed agent ID
-			s.logger.Debug("Parsed command message", zap.String("agent_id", cmdMsg.AgentID), zap.String("command", cmdMsg.Command), zap.String("action", cmdMsg.Action))
-
-			switch cmdMsg.Action {
-			case "list_agents":
-				s.handleListAgents()
-			case "initialize_session":
-				s.handleInitializeSession(cmdMsg)
-			default:
-				// Assume regular command if Action is empty and Command is present
-				if cmdMsg.Command != "" {
-					s.handleExecuteCommand(cmdMsg)
-				} else {
-					s.logger.Warn("Unknown or empty action/command received", zap.Any("command", cmdMsg))
-					s.sendErrorResponse(AGENT_RESPONSE_QUEUE, "Unknown or empty command")
-				}
-			}
-		}
-
-		queue.Listen(AGENT_COMMAND_QUEUE, processor) // Use imported queue.Listen
+		queue.Listen(AGENT_COMMAND_QUEUE, s.processQueueCommand)
 		s.logger.Info("Agent queue processor stopped")
 	}()
 }
 
-// handleListAgents sends the list of connected agents to AGENT_RESPONSE_QUEUE
-func (s *Server) handleListAgents() {
+// handleListAgents returns connected IDs through the requested reply route.
+func (s *Server) handleListAgents(cmd CommandMessage) {
 	s.agentsMutex.RLock()
 	agentIDs := make([]string, 0, len(s.agents))
 	for id := range s.agents {
@@ -725,21 +675,11 @@ func (s *Server) handleListAgents() {
 	})
 	// #endregion
 
-	responseBytes, err := json.Marshal(agentIDs) // Send back only the array of IDs
-	if err != nil {
-		s.logger.Error("Failed to marshal agent list", zap.Error(err))
-		s.sendErrorResponse(AGENT_RESPONSE_QUEUE, "Failed to create agent list response")
-		return
-	}
-
-	// Send response to the dedicated agent response queue
-	if err := queue.Send(AGENT_RESPONSE_QUEUE, string(responseBytes)); err != nil {
-		s.logger.Error("Failed to send agent list response", zap.Error(err))
-	}
+	s.replyToCommand(cmd, agentIDs)
 	s.logger.Info("Sent agent list response", zap.Strings("agents", agentIDs))
 	// #region agent log
 	debugtrace.Log("ui-pre-fix", "H6,H9", "internal/server/server.go:720", "server_sent_agent_list_response", map[string]interface{}{
-		"response": string(responseBytes),
+		"agents": agentIDs,
 	})
 	// #endregion
 }
@@ -748,7 +688,7 @@ func agentIDsCount(ids []string) int {
 	return len(ids)
 }
 
-// handleInitializeSession validates and confirms session start, responds to AGENT_RESPONSE_QUEUE
+// handleInitializeSession validates and confirms session start.
 func (s *Server) handleInitializeSession(cmd CommandMessage) {
 	s.agentsMutex.RLock()
 	_, exists := s.agents[cmd.AgentID]
@@ -756,21 +696,21 @@ func (s *Server) handleInitializeSession(cmd CommandMessage) {
 
 	if !exists {
 		s.logger.Warn("Initialize session failed: Agent not found", zap.String("agentId", cmd.AgentID))
-		s.sendErrorResponse(AGENT_RESPONSE_QUEUE, "Agent "+cmd.AgentID+" not found")
+		s.replyToCommand(cmd, CommandResponse{Success: false, Error: "Agent " + cmd.AgentID + " not found"})
 		return
 	}
 
 	s.logger.Info("Initialized session for agent", zap.String("sessionId", cmd.SessionID), zap.String("agentId", cmd.AgentID))
 
-	// Send success confirmation to the dedicated agent response queue
-	s.sendSuccessResponse(AGENT_RESPONSE_QUEUE, "Session initialized successfully")
+	// Confirm using the same private/legacy/no-reply policy as other commands.
+	s.replyToCommand(cmd, CommandResponse{Success: true, Message: "Session initialized successfully"})
 }
 
-// handleExecuteCommand sends command to agent via stream and acknowledges to AGENT_RESPONSE_QUEUE
+// handleExecuteCommand forwards a command and acknowledges its dispatch result.
 func (s *Server) handleExecuteCommand(cmd CommandMessage) {
 	if cmd.Target.Type != "agent" || cmd.Target.ID == "" {
 		s.logger.Error("Invalid target for agent command execution", zap.Any("target", cmd.Target))
-		s.sendErrorResponse(AGENT_RESPONSE_QUEUE, "Invalid target for agent command")
+		s.replyToCommand(cmd, CommandResponse{Success: false, Error: "Invalid target for agent command"})
 		return
 	}
 
@@ -782,23 +722,20 @@ func (s *Server) handleExecuteCommand(cmd CommandMessage) {
 
 	if !exists {
 		s.logger.Warn("Execute command failed: Agent not connected via stream", zap.String("agentId", targetAgentID))
-		s.sendErrorResponse(AGENT_RESPONSE_QUEUE, "Agent "+targetAgentID+" not connected")
+		s.replyToCommand(cmd, CommandResponse{Success: false, Error: "Agent " + targetAgentID + " not connected"})
 		return
 	}
 
-	// 1. Send acknowledgement back to the frontend immediately via AGENT_RESPONSE_QUEUE
-	s.sendSuccessResponse(AGENT_RESPONSE_QUEUE, "Command received, forwarding to agent")
-
-	// 2. Generate the unique command ID
+	// Generate the unique command ID.
 	commandID := fmt.Sprintf("%s:%s", targetAgentID, cmd.Timestamp)
 
-	// 3. Store the mapping before sending
+	// Store the mapping before sending.
 	pendingKey := targetAgentID + ":" + cmd.Command
 	s.pendingCommandsMutex.Lock()
 	s.pendingCommands[pendingKey] = commandID
 	s.pendingCommandsMutex.Unlock()
 
-	// 4. Forward command to the actual agent via gRPC stream
+	// Forward the command to the actual agent via gRPC stream.
 	commandToSend := &pb.ServerMessage{
 		Id:   commandID, // Use the generated unique ID
 		Type: pb.MessageType_COMMAND,
@@ -816,11 +753,14 @@ func (s *Server) handleExecuteCommand(cmd CommandMessage) {
 		s.pendingCommandsMutex.Lock()
 		delete(s.pendingCommands, pendingKey)
 		s.pendingCommandsMutex.Unlock()
-		// Note: No response sent back here on send failure, frontend will time out polling Valkey
 		s.agentsMutex.Lock()
 		delete(s.agents, targetAgentID)
 		s.agentsMutex.Unlock()
+		s.replyToCommand(cmd, CommandResponse{Success: false, Error: "Failed to forward command to agent"})
+		return
 	}
+	// Acknowledge dispatch only after the stream accepts the command.
+	s.replyToCommand(cmd, CommandResponse{Success: true, Message: "Command forwarded to agent"})
 }
 
 // sendSuccessResponse sends a generic success message to the specified queue
@@ -887,8 +827,16 @@ func (s *Server) agentAuthUnaryInterceptor(
 
 // Start starts the gRPC server and command processors
 func (s *Server) Start() error {
-	// Create a new gRPC server with the auth interceptor
+	// Validate again before binding; never fall back to plaintext on a TLS error.
+	creds, err := s.config.GRPCTransportCredentials()
+	if err != nil {
+		return fmt.Errorf("invalid gRPC transport configuration: %w", err)
+	}
+	if creds.Info().SecurityProtocol == "insecure" {
+		s.logger.Warn("Using plaintext gRPC on loopback for local development; server identity is not verified")
+	}
 	s.server = grpc.NewServer(
+		grpc.Creds(creds),
 		grpc.UnaryInterceptor(s.agentAuthUnaryInterceptor),
 	)
 	pb.RegisterHelloServiceServer(s.server, s)
@@ -1302,7 +1250,7 @@ func buildAgentClaimedIPs(scanResult *goapistore.ScanResult) map[string]bool {
 //  1. Primary IP matches a scan target (exact or CIDR membership)
 //  2. Hostname matches an existing host entry with a concrete IP
 //  3. Agent ID is a concrete IP and matches a target
-//  4–5. DNS-resolve hostname / agent ID and match targets
+//     4–5. DNS-resolve hostname / agent ID and match targets
 //  6. First existing scan host with concrete IP not yet claimed by another agent
 //  7. First concrete single-IP scan target not yet claimed
 //  8. Primary IP if concrete (last resort)
@@ -1449,6 +1397,10 @@ func appendAgentVulnerabilitiesDeduped(
 
 // mergeAgentScanResults merges agent scan results into the unified currentScan ValKey key
 func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.CommandResult) {
+	if result == nil || agentID == "" || scanID == "" {
+		s.logger.Warn("Cannot merge agent scan results without result, agent ID, and scan ID")
+		return
+	}
 	if s.valkeyClient == nil {
 		s.logger.Warn("Cannot merge agent scan results: ValKey client not available")
 		return
@@ -1538,362 +1490,26 @@ func (s *Server) mergeAgentScanResults(agentID, scanID string, result *pb.Comman
 			zap.String("agent_hostname", agentHostname))
 	}
 
-	// Read current scan state from ValKey
-	getCmd := s.valkeyClient.B().Get().Key("currentScan").Build()
-	resp := s.valkeyClient.Do(ctx, getCmd)
-
-	if resp.Error() != nil {
-		s.logger.Error("Failed to read currentScan from ValKey",
-			zap.Error(resp.Error()))
-		return
-	}
-
-	encoded, err := resp.ToString()
+	merged, err := s.mergeAgentScanState(ctx, valkeyScanStateStore{s.valkeyClient}, agentID, scanID,
+		result, agentHostname, agentPrimaryIP, matchedVulns)
 	if err != nil {
-		s.logger.Error("Failed to convert currentScan to string",
-			zap.Error(err))
+		s.logger.Error("Failed to merge agent scan results", zap.String("scan_id", scanID), zap.Error(err))
+		return
+	}
+	if merged == nil {
 		return
 	}
 
-	// The currentScan value is base64-encoded JSON
-	// We need to decode, modify, and re-encode
-	decodedBytes, decErr := base64Decode(encoded)
-	if decErr != nil {
-		s.logger.Error("Failed to decode currentScan base64",
-			zap.Error(decErr))
-		return
+	// Publish the projection only after the authoritative CAS succeeds. It has
+	// its own CAS so concurrent agent callbacks cannot lose each other's results.
+	if err := updateAgentScanProjection(ctx, valkeyScanStateStore{s.valkeyClient}, scanID, merged.metadata, merged.dispatching); err != nil {
+		s.logger.Error("Failed to update agent scan status", zap.String("scan_id", scanID), zap.Error(err))
 	}
-
-	var scanResult goapistore.ScanResult
-	if err := json.Unmarshal(decodedBytes, &scanResult); err != nil {
-		s.logger.Error("Failed to unmarshal currentScan",
-			zap.Error(err))
-		return
-	}
-
-	// Only merge if scan IDs match
-	if scanResult.ID != scanID {
-		s.logger.Warn("Scan ID mismatch, skipping merge",
-			zap.String("current_scan_id", scanResult.ID),
-			zap.String("agent_scan_id", scanID))
-		return
-	}
-
-	// Resolve concrete host IP before mutating sub-scan status or host rows
-	hostIP := s.resolveAgentHostIP(agentID, agentHostname, agentPrimaryIP, &scanResult)
-	hostResolved := hostIP != ""
-
-	// Update agent sub-scan status via sub_scans registry
-	if scanResult.SubScans == nil {
-		scanResult.SubScans = make(map[string]goapistore.SubScan)
-	}
-
-	// Get or create the agent sub-scan entry
-	agentSubScan, hasAgentSS := scanResult.SubScans["agent"]
-	if !hasAgentSS {
-		agentSubScan = goapistore.SubScan{
-			Type:    "agent",
-			Enabled: true,
-			Status:  "running",
-			Progress: goapistore.SubScanProgress{
-				Label: "agents",
-			},
-		}
-	}
-
-	// Parse existing agent metadata (or start fresh)
-	var agentMeta AgentSubScanMetadata
-	if agentSubScan.Metadata != nil {
-		_ = json.Unmarshal(agentSubScan.Metadata, &agentMeta)
-	}
-
-	// Ensure this agent is tracked in DispatchedAgents
-	agentFound := false
-	for _, id := range agentMeta.DispatchedAgents {
-		if id == agentID {
-			agentFound = true
-			break
-		}
-	}
-	if !agentFound {
-		agentMeta.DispatchedAgents = append(agentMeta.DispatchedAgents, agentID)
-	}
-
-	// Update or create agent status entry
-	statusFound := false
-	for i, as := range agentMeta.AgentStatuses {
-		if as.AgentID == agentID {
-			statusFound = true
-			now := time.Now().Format(time.RFC3339)
-			if result.ExitCode == 0 {
-				agentMeta.AgentStatuses[i].Status = "completed"
-				agentMeta.AgentStatuses[i].CompletedAt = now
-				if hostResolved {
-					agentMeta.AgentStatuses[i].HostsFound = 1
-					agentMeta.AgentStatuses[i].VulnerabilitiesFound = len(matchedVulns)
-				} else {
-					agentMeta.AgentStatuses[i].HostsFound = 0
-					agentMeta.AgentStatuses[i].VulnerabilitiesFound = 0
-				}
-			} else {
-				agentMeta.AgentStatuses[i].Status = "failed"
-				agentMeta.AgentStatuses[i].CompletedAt = now
-				agentMeta.AgentStatuses[i].Error = result.Error
-			}
-			break
-		}
-	}
-	if !statusFound {
-		now := time.Now().Format(time.RFC3339)
-		newStatus := AgentStatusEntry{AgentID: agentID, CompletedAt: now}
-		if result.ExitCode == 0 {
-			newStatus.Status = "completed"
-			if hostResolved {
-				newStatus.HostsFound = 1
-				newStatus.VulnerabilitiesFound = len(matchedVulns)
-			} else {
-				newStatus.HostsFound = 0
-				newStatus.VulnerabilitiesFound = 0
-			}
-		} else {
-			newStatus.Status = "failed"
-			newStatus.Error = result.Error
-		}
-		agentMeta.AgentStatuses = append(agentMeta.AgentStatuses, newStatus)
-	}
-
-	// Count completed agents and update progress
-	completed := 0
-	for _, as := range agentMeta.AgentStatuses {
-		if as.Status == "completed" || as.Status == "failed" {
-			completed++
-		}
-	}
-	totalAgents := len(agentMeta.DispatchedAgents)
-	agentSubScan.Progress.Completed = completed
-	agentSubScan.Progress.Total = totalAgents
-
-	// Update agent sub-scan status
-	if totalAgents > 0 && completed >= totalAgents {
-		agentSubScan.Status = "completed"
-	} else {
-		agentSubScan.Status = "running"
-	}
-
-	// Serialize metadata back
-	metaBytes, _ := json.Marshal(agentMeta)
-	agentSubScan.Metadata = metaBytes
-	scanResult.SubScans["agent"] = agentSubScan
-
-	// Determine overall scan completion: all enabled sub-scans must be done
-	allSubScansDone := true
-	for _, ss := range scanResult.SubScans {
-		if ss.Enabled && ss.Status != "completed" && ss.Status != "failed" {
-			allSubScansDone = false
-			break
-		}
-	}
-	if allSubScansDone && len(scanResult.SubScans) > 0 {
-		scanResult.Status = "completed"
-		if scanResult.EndTime == "" {
-			scanResult.EndTime = time.Now().Format(time.RFC3339)
-		}
-		s.logger.Info("All sub-scans completed, marking overall scan as completed",
-			zap.String("scan_id", scanID))
-	}
-
-	vulnsAdded := 0
-	if hostResolved {
-		// Merge host: look up by IP, create or update
-		hostIdx := -1
-		for i, h := range scanResult.Hosts {
-			if h.IP == hostIP {
-				hostIdx = i
-				break
-			}
-		}
-		if hostIdx >= 0 {
-			// Merge: add hostname and source
-			h := &scanResult.Hosts[hostIdx]
-			if agentHostname != "" {
-				if h.Hostname == "" {
-					h.Hostname = agentHostname
-				} else if h.Hostname != agentHostname {
-					// Preserve network-discovered name; keep agent-reported name as an alias
-					h.Aliases = appendUniqueString(h.Aliases, agentHostname)
-				}
-			}
-			sourceFound := false
-			for _, src := range h.Sources {
-				if src == "agent" {
-					sourceFound = true
-					break
-				}
-			}
-			if !sourceFound {
-				h.Sources = append(h.Sources, "agent")
-			}
-		} else {
-			// New host
-			newHost := goapistore.HostEntry{
-				ID:       hostIP,
-				IP:       hostIP,
-				Hostname: agentHostname,
-				Sources:  []string{"agent"},
-			}
-			scanResult.Hosts = append(scanResult.Hosts, newHost)
-		}
-
-		// Append extracted vulnerabilities with host_id (deduped)
-		if len(matchedVulns) > 0 {
-			var added int
-			scanResult.Vulnerabilities, added = appendAgentVulnerabilitiesDeduped(
-				scanResult.Vulnerabilities, matchedVulns, hostIP, agentID)
-			vulnsAdded = added
-			s.logger.Info("Added agent vulnerabilities to currentScan",
-				zap.Int("new_vulns", added),
-				zap.Int("total_vulns", len(scanResult.Vulnerabilities)))
-		}
-	} else if len(matchedVulns) > 0 && result.ExitCode == 0 {
-		s.logger.Warn("Agent reported vulnerabilities but host IP could not be resolved; not appending to currentScan",
-			zap.String("agent_id", agentID),
-			zap.String("scan_id", scanID),
-			zap.Int("skipped_vulns", len(matchedVulns)))
-	}
-
-	// Write back to ValKey
-	updatedJSON, err := json.Marshal(scanResult)
-	if err != nil {
-		s.logger.Error("Failed to marshal updated currentScan",
-			zap.Error(err))
-		return
-	}
-
-	encodedStr := base64Encode(updatedJSON)
-	setCmd := s.valkeyClient.B().Set().Key("currentScan").Value(encodedStr).Build()
-	if err := s.valkeyClient.Do(ctx, setCmd).Error(); err != nil {
-		s.logger.Error("Failed to write updated currentScan to ValKey",
-			zap.Error(err))
-		return
-	}
-
-	// Also update the agent_scan:{scanID} status key
-	s.updateAgentScanStatus(ctx, scanID, agentID, result)
-
 	s.logger.Info("Successfully merged agent scan results into currentScan",
 		zap.String("scan_id", scanID),
 		zap.String("agent_id", agentID),
-		zap.Int("vulnerabilities_added", vulnsAdded),
-		zap.String("host_ip", hostIP))
-}
-
-// updateAgentScanStatus updates the agent_scan:{scanId} status key in ValKey
-func (s *Server) updateAgentScanStatus(ctx context.Context, scanID, agentID string, result *pb.CommandResult) {
-	statusKey := fmt.Sprintf("agent_scan:%s", scanID)
-
-	getCmd := s.valkeyClient.B().Get().Key(statusKey).Build()
-	resp := s.valkeyClient.Do(ctx, getCmd)
-
-	if resp.Error() != nil {
-		// Key doesn't exist yet (race condition: agent completed before frontend wrote the key)
-		// Create the status key with the agent's result
-		s.logger.Info("agent_scan status key not found, creating it",
-			zap.String("key", statusKey),
-			zap.String("agent_id", agentID))
-
-		agentStatus := "completed"
-		if result.ExitCode != 0 {
-			agentStatus = "failed"
-		}
-
-		newStatus := map[string]interface{}{
-			"scanId":         scanID,
-			"status":         agentStatus,
-			"totalAgents":    1,
-			"completedAgents": 1,
-			"failedAgents":   0,
-			"agentStatuses": []map[string]interface{}{
-				{
-					"agentId":              agentID,
-					"status":               agentStatus,
-					"hostsFound":           0,
-					"vulnerabilitiesFound": 0,
-				},
-			},
-			"completedAt": time.Now().Format(time.RFC3339),
-		}
-
-		statusBytes, _ := json.Marshal(newStatus)
-		setCmd := s.valkeyClient.B().Set().Key(statusKey).Value(string(statusBytes)).Ex(3600 * time.Second).Build()
-		if err := s.valkeyClient.Do(ctx, setCmd).Error(); err != nil {
-			s.logger.Error("Failed to create agent_scan status key", zap.Error(err))
-		}
-		return
-	}
-
-	statusStr, err := resp.ToString()
-	if err != nil {
-		s.logger.Warn("Could not convert agent_scan status to string",
-			zap.Error(err))
-		return
-	}
-
-	var status map[string]interface{}
-	if err := json.Unmarshal([]byte(statusStr), &status); err != nil {
-		s.logger.Warn("Could not parse agent_scan status",
-			zap.Error(err))
-		return
-	}
-
-	// Update agent status within the status object
-	if agentStatuses, ok := status["agentStatuses"].([]interface{}); ok {
-		for i, s := range agentStatuses {
-			if sm, ok := s.(map[string]interface{}); ok {
-				if sm["agentId"] == agentID {
-					if result.ExitCode == 0 {
-						sm["status"] = "completed"
-					} else {
-						sm["status"] = "failed"
-						sm["error"] = result.Error
-					}
-					agentStatuses[i] = sm
-					break
-				}
-			}
-		}
-	}
-
-	// Count completed
-	completedCount := 0
-	if agentStatuses, ok := status["agentStatuses"].([]interface{}); ok {
-		for _, s := range agentStatuses {
-			if sm, ok := s.(map[string]interface{}); ok {
-				st, _ := sm["status"].(string)
-				if st == "completed" || st == "failed" {
-					completedCount++
-				}
-			}
-		}
-	}
-	status["completedAgents"] = completedCount
-
-	totalAgents := 0
-	if ta, ok := status["totalAgents"].(float64); ok {
-		totalAgents = int(ta)
-	}
-
-	if completedCount >= totalAgents && totalAgents > 0 {
-		status["status"] = "completed"
-	}
-
-	updatedJSON, err := json.Marshal(status)
-	if err != nil {
-		return
-	}
-
-	// Write back with TTL
-	setCmd := s.valkeyClient.B().Set().Key(statusKey).Value(string(updatedJSON)).Ex(3600 * time.Second).Build()
-	s.valkeyClient.Do(ctx, setCmd)
+		zap.Int("vulnerabilities_added", merged.vulnsAdded),
+		zap.String("host_ip", merged.hostIP))
 }
 
 // base64Decode decodes a base64-encoded string
