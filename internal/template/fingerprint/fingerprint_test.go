@@ -102,3 +102,29 @@ func TestCollectBasicFingerprintCancellation(t *testing.T) {
 	}
 }
 
+func TestCollectBasicFingerprintHostIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name, agentID, hostID, wantHostID string
+	}{
+		{"configured host differs from agent", "agent-123", "asset-456", "asset-456"},
+		{"configured host matches agent", "agent-123", "agent-123", "agent-123"},
+		{"default host identity", "agent-123", "", "agent-123"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.AgentConfig{AgentID: tc.agentID, HostID: tc.hostID}
+			fp, err := CollectBasicFingerprint(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fp.HostID != tc.wantHostID {
+				t.Fatalf("host identity=%q, want %q", fp.HostID, tc.wantHostID)
+			}
+			if fp.AgentID != tc.agentID {
+				t.Fatalf("agent identity changed: %q", fp.AgentID)
+			}
+			if cfg.HostID != tc.hostID {
+				t.Fatal("fingerprinting mutated configuration")
+			}
+		})
+	}
+}

@@ -1,9 +1,11 @@
 package reporting
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/SiriusScan/app-agent/internal/config"
 	"github.com/SiriusScan/app-agent/internal/template/fingerprint"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
@@ -277,5 +279,31 @@ func TestBuildAgentMetadataWithNilResults(t *testing.T) {
 	matchedCount := metadata["matched_count"].(int)
 	if matchedCount != 1 {
 		t.Errorf("matched_count = %d, want 1", matchedCount)
+	}
+}
+
+func TestBuildHostDataConfiguredIdentity(t *testing.T) {
+	// The same AgentConfig supplies status reporting's HID. Template reporting
+	// must use this host identity even when the agent has a different ID.
+	for _, tc := range []struct {
+		name, agentID, hostID, wantHID string
+	}{
+		{"distinct configured HOST_ID", "agent-123", "asset-456", "asset-456"},
+		{"default HOST_ID", "agent-123", "", "agent-123"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.AgentConfig{AgentID: tc.agentID, HostID: tc.hostID}
+			fp, err := fingerprint.CollectBasicFingerprint(context.Background(), cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			host := BuildHostData(fp, nil)
+			if host.HID != tc.wantHID {
+				t.Fatalf("template HID=%q, want configured host identity %q", host.HID, tc.wantHID)
+			}
+			if fp.AgentID != tc.agentID {
+				t.Fatal("template reporting changed agent identity")
+			}
+		})
 	}
 }

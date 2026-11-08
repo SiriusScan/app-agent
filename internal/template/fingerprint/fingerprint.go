@@ -16,6 +16,7 @@ type HostFingerprint struct {
 	Hostname  string // System hostname
 	PrimaryIP string // Primary non-loopback IPv4 address
 	AgentID   string // Agent identifier
+	HostID    string // Backend host identifier (may differ from AgentID)
 }
 
 // CollectBasicFingerprint gathers basic host identification information.
@@ -27,6 +28,12 @@ func CollectBasicFingerprint(ctx context.Context, cfg *config.AgentConfig) (*Hos
 		OSVersion: sysinfo.GetOSVersion(),
 		PrimaryIP: sysinfo.GetPrimaryIP(),
 		AgentID:   cfg.AgentID,
+		HostID:    cfg.HostID,
+	}
+
+	// Match LoadAgentConfig's default for programmatically constructed configs.
+	if fingerprint.HostID == "" {
+		fingerprint.HostID = cfg.AgentID
 	}
 
 	// Get hostname (best effort)
@@ -42,4 +49,3 @@ func CollectBasicFingerprint(ctx context.Context, cfg *config.AgentConfig) (*Hos
 	// This ensures template scans can still report even if fingerprinting partially fails
 	return fingerprint, nil
 }
-
