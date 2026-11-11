@@ -16,7 +16,7 @@ func TestEnrollmentCredentialIsAdditive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if decoded.GetEnrollmentCredential() != "" || decoded.GetAuthToken() != "token" {
-		t.Fatalf("legacy message: %+v", decoded)
+		t.Fatalf("legacy message: %+v", &decoded)
 	}
 	newMessage := &AgentMessage{AgentId: "agent", EnrollmentCredential: "credential"}
 	b, err = proto.Marshal(newMessage)
