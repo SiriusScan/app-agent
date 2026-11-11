@@ -308,9 +308,11 @@ type AgentMessage struct {
 	Payload isAgentMessage_Payload `protobuf_oneof:"payload"`
 	// Authentication token presented by the agent on every message.
 	// Empty on the very first connection; populated after the server issues a token.
-	AuthToken     string `protobuf:"bytes,6,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	AuthToken string `protobuf:"bytes,6,opt,name=auth_token,json=authToken,proto3" json:"auth_token,omitempty"`
+	// Optional credential used only for first enrollment.
+	EnrollmentCredential string `protobuf:"bytes,7,opt,name=enrollment_credential,json=enrollmentCredential,proto3" json:"enrollment_credential,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *AgentMessage) Reset() {
@@ -394,6 +396,13 @@ func (x *AgentMessage) GetSyncRequest() *TemplateSyncRequest {
 func (x *AgentMessage) GetAuthToken() string {
 	if x != nil {
 		return x.AuthToken
+	}
+	return ""
+}
+
+func (x *AgentMessage) GetEnrollmentCredential() string {
+	if x != nil {
+		return x.EnrollmentCredential
 	}
 	return ""
 }
@@ -1153,7 +1162,7 @@ const file_proto_hello_hello_proto_rawDesc = "" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x14\n" +
 	"\x05error\x18\x02 \x01(\tR\x05error\x12\x1b\n" +
 	"\texit_code\x18\x03 \x01(\x05R\bexitCode\x12%\n" +
-	"\x0eexecution_time\x18\x04 \x01(\x03R\rexecutionTime\"\xa5\x02\n" +
+	"\x0eexecution_time\x18\x04 \x01(\x03R\rexecutionTime\"\xda\x02\n" +
 	"\fAgentMessage\x12\x19\n" +
 	"\bagent_id\x18\x01 \x01(\tR\aagentId\x12&\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x12.hello.MessageTypeR\x04type\x127\n" +
@@ -1161,7 +1170,8 @@ const file_proto_hello_hello_proto_rawDesc = "" +
 	"\x06result\x18\x04 \x01(\v2\x14.hello.CommandResultH\x00R\x06result\x12?\n" +
 	"\fsync_request\x18\x05 \x01(\v2\x1a.hello.TemplateSyncRequestH\x00R\vsyncRequest\x12\x1d\n" +
 	"\n" +
-	"auth_token\x18\x06 \x01(\tR\tauthTokenB\t\n" +
+	"auth_token\x18\x06 \x01(\tR\tauthToken\x123\n" +
+	"\x15enrollment_credential\x18\a \x01(\tR\x14enrollmentCredentialB\t\n" +
 	"\apayload\"\xa7\x02\n" +
 	"\rServerMessage\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12&\n" +

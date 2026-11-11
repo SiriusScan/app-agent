@@ -170,6 +170,7 @@ func (a *Agent) WaitForCommands(ctx context.Context) error {
 	// Capture newly issued token (non-empty only when server generated one).
 	if newToken := welcomeMsg.GetAuthToken(); newToken != "" {
 		a.authToken = newToken
+		a.config.EnrollmentCredential = ""
 		a.logger.Info("Received new auth token from server — persisting")
 		if err := a.config.SaveAuthToken(newToken); err != nil {
 			a.logger.Warn("Failed to persist auth token to file (will retry next connect)",
@@ -252,6 +253,10 @@ func (a *Agent) sendAuthenticatedHeartbeat(ctx context.Context) error {
 			Heartbeat: heartbeat,
 		},
 		AuthToken: a.authToken, // Empty on first-ever connection; populated on reconnects.
+	}
+
+	if a.authToken == "" {
+		msg.EnrollmentCredential = a.config.EnrollmentCredential
 	}
 
 	a.logger.Info("Sending authenticated initial heartbeat",

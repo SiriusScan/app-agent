@@ -5,7 +5,7 @@ go 1.24.0
 toolchain go1.24.1
 
 require (
-	github.com/SiriusScan/go-api v0.0.19-0.20261108104525-3299d88469f0
+	github.com/SiriusScan/go-api v0.0.22-0.20261111060257-289b149e7287
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/spf13/cobra v1.10.1
 	github.com/streadway/amqp v1.1.0

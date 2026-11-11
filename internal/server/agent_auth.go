@@ -4,19 +4,26 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/SiriusScan/app-agent/enrollment"
 	goapistore "github.com/SiriusScan/go-api/sirius/store"
 )
 
 // authenticateAgent returns a token only to the connection that atomically
 // enrolled the agent. Failed reads, unsupported stores, and concurrent losers
 // cannot enroll, replace a token, or register a stream.
-func (s *Server) authenticateAgent(ctx context.Context, agentID, suppliedToken string) (string, error) {
+func (s *Server) authenticateAgent(ctx context.Context, agentID, suppliedToken, credential string) (string, error) {
 	if s.kvStore == nil {
 		return "", fmt.Errorf("agent authentication store unavailable")
 	}
 	if suppliedToken != "" {
-		if _, err := goapistore.ValidateAgentToken(ctx, s.kvStore, agentID, suppliedToken); err != nil {
+		meta, err := goapistore.ValidateAgentToken(ctx, s.kvStore, agentID, suppliedToken)
+		if err != nil {
 			return "", fmt.Errorf("invalid agent token: %w", err)
+		}
+		if meta.CredentialID != "" {
+			if err := s.authorizer().ValidateCredential(ctx, meta.CredentialID); err != nil {
+				return "", fmt.Errorf("enrollment credential invalid or revoked")
+			}
 		}
 		return "", nil
 	}
@@ -28,6 +35,10 @@ func (s *Server) authenticateAgent(ctx context.Context, agentID, suppliedToken s
 	if exists {
 		return "", fmt.Errorf("agent %s must present auth_token", agentID)
 	}
+	identity, err := s.authorizer().AuthorizeEnrollment(ctx, enrollment.Request{AgentID: agentID, Credential: credential})
+	if err != nil {
+		return "", fmt.Errorf("enrollment credential rejected")
+	}
 	generate := s.agentTokenGenerator
 	if generate == nil {
 		generate = goapistore.GenerateAgentToken
@@ -36,7 +47,7 @@ func (s *Server) authenticateAgent(ctx context.Context, agentID, suppliedToken s
 	if err != nil {
 		return "", fmt.Errorf("failed to generate agent token: %w", err)
 	}
-	created, err := goapistore.StoreAgentTokenIfAbsent(ctx, s.kvStore, agentID, token)
+	created, err := goapistore.StoreAgentTokenWithMetadataIfAbsent(ctx, s.kvStore, goapistore.AgentTokenMeta{AgentID: agentID, Token: token, SubjectID: identity.SubjectID, CredentialID: identity.CredentialID})
 	if err != nil {
 		return "", fmt.Errorf("failed to enroll agent: %w", err)
 	}

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/SiriusScan/app-agent/enrollment"
 	"github.com/SiriusScan/app-agent/internal/debugtrace"
 	valkey "github.com/valkey-io/valkey-go"
 	"go.uber.org/zap"
@@ -126,7 +127,8 @@ type Server struct {
 	// KVStore for agent token authentication
 	kvStore goapistore.KVStore
 	// Optional per-server generator for deterministic enrollment tests.
-	agentTokenGenerator func() (string, error)
+	agentTokenGenerator  func() (string, error)
+	enrollmentAuthorizer enrollment.Authorizer
 }
 
 // NewServer creates a new HelloService server
@@ -293,7 +295,7 @@ func (s *Server) ConnectStream(stream pb.HelloService_ConnectStreamServer) error
 	fmt.Printf("Agent connected to stream: %s\n", agentID)
 
 	// Authentication must succeed before the stream is registered or welcomed.
-	issuedToken, err := s.authenticateAgent(stream.Context(), agentID, msg.GetAuthToken())
+	issuedToken, err := s.authenticateAgent(stream.Context(), agentID, msg.GetAuthToken(), msg.GetEnrollmentCredential())
 	if err != nil {
 		s.logger.Warn("Agent token authentication failed", zap.String("agent_id", agentID), zap.Error(err))
 		return fmt.Errorf("agent token authentication failed: %w", err)

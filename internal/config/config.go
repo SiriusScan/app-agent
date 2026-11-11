@@ -11,25 +11,27 @@ import (
 
 // ServerConfig holds configuration for the server
 type ServerConfig struct {
-	Address       string // Address to listen on, e.g., :50051
-	GRPCTransport string // tls (default) or insecure-loopback (local development only)
-	TLSCertFile   string // PEM server certificate chain
-	TLSKeyFile    string // PEM server private key
+	EnrollmentCredential string // Optional shared first-enrollment credential
+	Address              string // Address to listen on, e.g., :50051
+	GRPCTransport        string // tls (default) or insecure-loopback (local development only)
+	TLSCertFile          string // PEM server certificate chain
+	TLSKeyFile           string // PEM server private key
 }
 
 // AgentConfig holds configuration for the agent
 type AgentConfig struct {
-	ServerAddress   string // Address of the gRPC server to connect to
-	GRPCTransport   string // tls (default) or insecure-loopback (local development only)
-	TLSCAFile       string // Optional PEM trust bundle; empty uses system roots
-	TLSServerName   string // Optional expected certificate DNS name; empty uses server address
-	AgentID         string // Unique ID for this agent (defaults to hostname)
-	HostID          string // Unique ID for the host record in the backend (defaults to AgentID)
-	ApiBaseURL      string // Base URL for the backend REST API
-	PowerShellPath  string // Optional override path for PowerShell executable
-	EnableScripting bool   // Whether to enable PowerShell scripting
-	AuthToken       string // Persisted authentication token for gRPC auth
-	TokenFilePath   string // File path where the auth token is stored
+	ServerAddress        string // Address of the gRPC server to connect to
+	GRPCTransport        string // tls (default) or insecure-loopback (local development only)
+	TLSCAFile            string // Optional PEM trust bundle; empty uses system roots
+	TLSServerName        string // Optional expected certificate DNS name; empty uses server address
+	AgentID              string // Unique ID for this agent (defaults to hostname)
+	HostID               string // Unique ID for the host record in the backend (defaults to AgentID)
+	ApiBaseURL           string // Base URL for the backend REST API
+	PowerShellPath       string // Optional override path for PowerShell executable
+	EnableScripting      bool   // Whether to enable PowerShell scripting
+	AuthToken            string // Persisted authentication token for gRPC auth
+	EnrollmentCredential string // First connection credential; never logged
+	TokenFilePath        string // File path where the auth token is stored
 }
 
 // LoadServerConfig loads server configuration from environment variables
@@ -41,10 +43,11 @@ func LoadServerConfig() *ServerConfig {
 	}
 
 	return &ServerConfig{
-		Address:       addr,
-		GRPCTransport: os.Getenv("GRPC_TRANSPORT"),
-		TLSCertFile:   os.Getenv("GRPC_TLS_CERT_FILE"),
-		TLSKeyFile:    os.Getenv("GRPC_TLS_KEY_FILE"),
+		Address:              addr,
+		EnrollmentCredential: os.Getenv("SERVER_ENROLLMENT_CREDENTIAL"),
+		GRPCTransport:        os.Getenv("GRPC_TRANSPORT"),
+		TLSCertFile:          os.Getenv("GRPC_TLS_CERT_FILE"),
+		TLSKeyFile:           os.Getenv("GRPC_TLS_KEY_FILE"),
 	}
 }
 
@@ -130,17 +133,18 @@ func LoadAgentConfig() *AgentConfig {
 	}
 
 	return &AgentConfig{
-		ServerAddress:   serverAddr,
-		GRPCTransport:   os.Getenv("GRPC_TRANSPORT"),
-		TLSCAFile:       os.Getenv("GRPC_TLS_CA_FILE"),
-		TLSServerName:   os.Getenv("GRPC_TLS_SERVER_NAME"),
-		AgentID:         agentID,
-		HostID:          hostID,
-		ApiBaseURL:      apiURL,
-		PowerShellPath:  psPath,
-		EnableScripting: enableScripting,
-		AuthToken:       authToken,
-		TokenFilePath:   tokenFilePath,
+		ServerAddress:        serverAddr,
+		GRPCTransport:        os.Getenv("GRPC_TRANSPORT"),
+		TLSCAFile:            os.Getenv("GRPC_TLS_CA_FILE"),
+		TLSServerName:        os.Getenv("GRPC_TLS_SERVER_NAME"),
+		AgentID:              agentID,
+		HostID:               hostID,
+		ApiBaseURL:           apiURL,
+		PowerShellPath:       psPath,
+		EnableScripting:      enableScripting,
+		AuthToken:            authToken,
+		EnrollmentCredential: os.Getenv("AGENT_ENROLLMENT_CREDENTIAL"),
+		TokenFilePath:        tokenFilePath,
 	}
 }
 

@@ -217,3 +217,23 @@ goreleaser build --snapshot --clean
 ## License
 
 This project is part of the Sirius Security Platform. See [LICENSE](LICENSE) for details.
+
+### Agent enrollment
+
+For a shared Community enrollment credential, configure the server with
+`SERVER_ENROLLMENT_CREDENTIAL` and the agent with the same value in
+`AGENT_ENROLLMENT_CREDENTIAL`, using your existing secret store. The credential
+is sent only on a tokenless initial connection over the configured gRPC
+transport. The server issues a token once; the agent persists it and uses that
+for subsequent connections. Changing or removing the configured credential
+rejects reconnects for tokens issued under it. Existing tokens without a
+credential reference retain their prior behavior. With no server credential,
+Community's legacy global enrollment behavior remains available.
+
+The public `enrollment.Authorizer` interface permits an embedding to validate
+other credential types and return an opaque subject and non-secret credential
+reference. The server checks a nonempty reference on every reconnect; admission
+backend errors deny access. An embedding can construct the server via `agentserver.New` and call
+`SetEnrollmentAuthorizer` before serving streams. The
+raw credential is never stored as token attribution or logged by this code.
+The caller is responsible for authorizing use of the resulting subject.

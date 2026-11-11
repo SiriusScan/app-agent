@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/SiriusScan/app-agent/enrollment"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -231,7 +233,7 @@ func TestAgentEnrollmentGenerationFailureDoesNotCreateToken(t *testing.T) {
 	server := authTestServer(kv)
 	expected := errors.New("synthetic entropy failure")
 	server.agentTokenGenerator = func() (string, error) { return "", expected }
-	token, err := server.authenticateAgent(context.Background(), "fixture", "")
+	token, err := server.authenticateAgent(context.Background(), "fixture", "", "")
 	if token != "" || !errors.Is(err, expected) || kv.creates != 0 {
 		t.Fatalf("generation failure was not closed: %v", err)
 	}
@@ -268,5 +270,77 @@ func TestAgentEnrollmentUncertainWriteNeverWelcomesOrOverwrites(t *testing.T) {
 	}
 	if len(retry.welcomed) != 0 || kv.value != original || kv.creates != 1 || kv.writes != 0 {
 		t.Fatal("uncertain enrollment overwritten or disclosed")
+	}
+}
+
+type fixedEnrollmentAuthorizer struct {
+	identity enrollment.Identity
+	reject   bool
+	revoked  bool
+}
+
+func (a *fixedEnrollmentAuthorizer) AuthorizeEnrollment(_ context.Context, req enrollment.Request) (enrollment.Identity, error) {
+	if a.reject || req.Credential != "synthetic-credential" {
+		return enrollment.Identity{}, errors.New("rejected")
+	}
+	return a.identity, nil
+}
+func (a *fixedEnrollmentAuthorizer) ValidateCredential(_ context.Context, id string) error {
+	if a.revoked || id != a.identity.CredentialID {
+		return errors.New("revoked")
+	}
+	return nil
+}
+
+func TestEnrollmentCredentialAttributionAndRevocation(t *testing.T) {
+	kv := &agentAuthKV{}
+	server := authTestServer(kv)
+	policy := &fixedEnrollmentAuthorizer{identity: enrollment.Identity{SubjectID: "opaque-subject", CredentialID: "credential-ref"}}
+	server.SetEnrollmentAuthorizer(policy)
+	denied := authTestStream("")
+	denied.initial.EnrollmentCredential = "invalid"
+	if err := server.ConnectStream(denied); err == nil || len(denied.welcomed) != 0 || kv.creates != 0 {
+		t.Fatalf("invalid credential accepted: %v", err)
+	}
+	first := authTestStream("")
+	first.initial.EnrollmentCredential = "synthetic-credential"
+	if err := server.ConnectStream(first); !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	var meta goapistore.AgentTokenMeta
+	if err := json.Unmarshal([]byte(kv.value), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.SubjectID != "opaque-subject" || meta.CredentialID != "credential-ref" {
+		t.Fatalf("lost attribution: %+v", meta)
+	}
+	if strings.Contains(kv.value, "synthetic-credential") {
+		t.Fatal("secret persisted")
+	}
+	reconnect := authTestStream("fake-new-token")
+	if err := server.ConnectStream(reconnect); !errors.Is(err, io.EOF) {
+		t.Fatalf("valid reconnect: %v", err)
+	}
+	policy.revoked = true
+	revoked := authTestStream("fake-new-token")
+	if err := server.ConnectStream(revoked); err == nil || len(revoked.welcomed) != 0 {
+		t.Fatalf("revoked credential accepted: %v", err)
+	}
+}
+
+func TestSharedEnrollmentCredential(t *testing.T) {
+	a := sharedCredentialAuthorizer{credential: "synthetic-credential"}
+	if _, err := a.AuthorizeEnrollment(context.Background(), enrollment.Request{Credential: "wrong"}); err == nil {
+		t.Fatal("wrong credential accepted")
+	}
+	id, err := a.AuthorizeEnrollment(context.Background(), enrollment.Request{Credential: "synthetic-credential"})
+	if err != nil || id.CredentialID == "" {
+		t.Fatalf("valid credential: %v", err)
+	}
+	if err := a.ValidateCredential(context.Background(), id.CredentialID); err != nil {
+		t.Fatal(err)
+	}
+	if err := (sharedCredentialAuthorizer{credential: "new"}).ValidateCredential(context.Background(), id.CredentialID); err == nil {
+		t.Fatal("rotated credential accepted")
 	}
 }
