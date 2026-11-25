@@ -146,6 +146,33 @@ remediation: |
 
 See [documentation/README.template-architect-guide.md](documentation/README.template-architect-guide.md) for the complete template authoring guide.
 
+### Validate a template repository
+
+From the app-agent source checkout, pass the root of a local module checkout:
+
+```bash
+go run ./cmd/template-cli validate-repository /path/to/sirius-agent-modules
+```
+
+The validator reads `repository-manifest.json`, `templates/manifest.json`, and
+the recursively listed `.yaml` and `.yml` template files. It reports missing
+and unlisted files, invalid detection steps, duplicate IDs, and manifest drift
+with repository-relative paths. It exits with status 1 for validation errors
+and 0 on success. It needs no Valkey or remote service and does not execute
+templates or scripts. This rollout adds the offline command. Engine import
+integration follows the official module manifest cleanup.
+
+| Template manifest `format_version` | Checksum, size, and ID policy |
+| --- | --- |
+| Omitted or `1` | Missing checksums and the published legacy placeholders produce warnings. Any other declared SHA-256 checksum must be well formed and match the exact file bytes. A declared size must match. Absent YAML IDs may inherit the manifest ID. |
+| `2` | Each entry requires its exact byte size, lowercase `sha256:<64 hex characters>` checksum, and a YAML ID matching the declared ID. |
+
+`format_version` is separate from the manifest's release `version`. Both
+formats preserve the author, version, and severity fallbacks from the manifest
+and the parser's detection defaults. Template paths are relative to
+`templates/`, with forward slashes. The command accepts regular files up to
+1 MiB per template and 8 MiB per manifest.
+
 ## Configuration
 
 | Environment Variable | Description                                                                    | Default                       |
