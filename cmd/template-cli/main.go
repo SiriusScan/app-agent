@@ -4,16 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
-	siriusbootstrap "github.com/SiriusScan/app-agent/internal/family/sirius/bootstrap"
+	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent"
+	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"
+	_ "github.com/SiriusScan/app-agent/internal/modules/filesearch"
 	"github.com/SiriusScan/app-agent/internal/modules/registry"
+	_ "github.com/SiriusScan/app-agent/internal/modules/versioncmd"
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/parser"
+	"github.com/SiriusScan/app-agent/internal/template/repository"
 )
 
 func main() {
-	siriusbootstrap.LoadCompatibilityRuntime()
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
@@ -28,6 +32,8 @@ func main() {
 		runAllTemplates()
 	case "validate":
 		validateTemplate()
+	case "validate-repository":
+		os.Exit(validateRepository(os.Args[2:], os.Stdout, os.Stderr))
 	case "list-modules":
 		listModules()
 	case "module-info":
@@ -48,6 +54,7 @@ func printUsage() {
 	fmt.Println("  template-cli run <template-file>        Run a single template")
 	fmt.Println("  template-cli run-all <directory>        Run all templates in directory")
 	fmt.Println("  template-cli validate <template-file>   Validate a template")
+	fmt.Println("  template-cli validate-repository <path> Validate templates in a local repository checkout")
 	fmt.Println("  template-cli list-modules               List available detection modules")
 	fmt.Println("  template-cli module-info <type>         Show module information")
 	fmt.Println("  template-cli help                       Show this help message")
@@ -245,6 +252,24 @@ func validateTemplate() {
 	fmt.Println("\n✅ Template is valid!")
 	fmt.Printf("  Steps: %d\n", len(template.Detection.Steps))
 	fmt.Printf("  Logic: %s\n", template.Detection.Logic)
+}
+
+func validateRepository(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "Usage: template-cli validate-repository <path>")
+		return 1
+	}
+
+	candidate, err := repository.Load(args[0])
+	for _, warning := range candidate.Warnings {
+		fmt.Fprintf(stderr, "warning: %v\n", warning)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "Template repository validation failed:\n%v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "Validated %d template(s)\n", len(candidate.Templates))
+	return 0
 }
 
 func listModules() {
