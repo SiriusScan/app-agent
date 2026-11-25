@@ -2,7 +2,6 @@ package valkey
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,14 +9,22 @@ import (
 	"time"
 
 	"go.uber.org/zap"
-	"gopkg.in/yaml.v3"
 
+	"github.com/SiriusScan/app-agent/internal/template/repository"
 	"github.com/SiriusScan/app-agent/internal/template/types"
 )
 
+// repositoryStorage is the set of catalog operations used by GitHub sync.
+type repositoryStorage interface {
+	GetTemplateMetadata(ctx context.Context, templateID string) (*TemplateInfo, error)
+	GetTemplateManifest(ctx context.Context) (*TemplateManifest, error)
+	StoreTemplate(ctx context.Context, template *types.Template, content []byte, isCustom bool, repositoryID ...string) error
+	UpdateTemplateManifest(ctx context.Context, manifest *TemplateManifest) error
+}
+
 // GitHubSyncManager manages synchronization with GitHub repositories
 type GitHubSyncManager struct {
-	storage  *ValKeyTemplateStorage
+	storage  repositoryStorage
 	logger   *zap.Logger
 	repoPath string
 	repoURL  string
@@ -36,99 +43,101 @@ func NewGitHubSyncManager(storage *ValKeyTemplateStorage, logger *zap.Logger, re
 	}
 }
 
-// RepositoryManifest represents the repository manifest structure
-type RepositoryManifest struct {
-	Version     string                 `json:"version"`
-	Updated     string                 `json:"updated"`
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Components  map[string]Component   `json:"components"`
-	Statistics  map[string]interface{} `json:"statistics"`
-}
-
-// Component represents a repository component
-type Component struct {
-	Path     string `json:"path"`
-	Manifest string `json:"manifest"`
-	Version  string `json:"version"`
-	Updated  string `json:"updated"`
-}
-
-// GitHubTemplateManifest represents the templates manifest structure from GitHub
-type GitHubTemplateManifest struct {
-	Version     string                            `json:"version"`
-	Updated     string                            `json:"updated"`
-	Description string                            `json:"description"`
-	Templates   map[string]*TemplateManifestEntry `json:"templates"`
-	Statistics  map[string]interface{}            `json:"statistics"`
-}
-
-// TemplateManifestEntry represents a template entry in the manifest
-type TemplateManifestEntry struct {
-	ID               string   `json:"id"`
-	Version          string   `json:"version"`
-	Checksum         string   `json:"checksum"`
-	Size             int64    `json:"size"`
-	Severity         string   `json:"severity"`
-	Platforms        []string `json:"platforms"`
-	DetectionType    string   `json:"detection_type"`
-	Author           string   `json:"author"`
-	Created          string   `json:"created"`
-	Updated          string   `json:"updated"`
-	VulnerabilityIDs []string `json:"vulnerability_ids"`
-}
-
-// SyncFromGitHub synchronizes templates from GitHub repository
+// SyncFromGitHub synchronizes templates from a GitHub repository.
 func (g *GitHubSyncManager) SyncFromGitHub(ctx context.Context, repoID string) error {
 	g.logger.Info("Starting GitHub template sync",
 		zap.String("repo_id", repoID),
 		zap.String("repo_url", g.repoURL),
 		zap.String("repo_path", g.repoPath))
 
-	// Clone or update repository
 	if err := g.ensureRepository(ctx); err != nil {
-		return fmt.Errorf("failed to ensure repository: %w", err)
+		return fmt.Errorf("prepare repository %q: %w", repoID, err)
 	}
+	return g.syncCheckout(ctx, repoID)
+}
 
-	// Load repository manifest
-	repoManifest, err := g.loadRepositoryManifest()
+// syncCheckout validates the complete checkout before reading or updating its catalog records.
+func (g *GitHubSyncManager) syncCheckout(ctx context.Context, repoID string) error {
+	candidate, err := repository.Load(g.repoPath)
+	for _, warning := range candidate.Warnings {
+		g.logger.Warn("Legacy repository template validation",
+			zap.String("repo_id", repoID), zap.Error(warning))
+	}
 	if err != nil {
-		return fmt.Errorf("failed to load repository manifest: %w", err)
+		return fmt.Errorf("validate repository %q: %w", repoID, err)
 	}
 
-	// Load templates manifest
-	templatesManifest, err := g.loadTemplatesManifest()
-	if err != nil {
-		return fmt.Errorf("failed to load templates manifest: %w", err)
-	}
-
-	// Process templates
-	var processedCount int
-	var errorCount int
-
-	for templatePath, templateEntry := range templatesManifest.Templates {
-		if err := g.processTemplate(ctx, templatePath, templateEntry, repoID); err != nil {
-			g.logger.Error("Failed to process template",
-				zap.String("path", templatePath),
-				zap.Error(err))
-			errorCount++
-			continue
+	// The standard and custom records currently share their metadata and
+	// version keys. Keep the active custom record when it shadows a standard ID.
+	templates := make([]repository.Template, 0, len(candidate.Templates))
+	for _, template := range candidate.Templates {
+		id := template.Definition.ID
+		metadata, err := g.storage.GetTemplateMetadata(ctx, id)
+		if err != nil {
+			return fmt.Errorf("repository %q %s: check catalog metadata: %w", repoID, template.Path, err)
 		}
-		processedCount++
+		if metadata != nil {
+			if metadata.IsCustom {
+				g.logger.Debug("Custom template takes precedence over repository template",
+					zap.String("repo_id", repoID), zap.String("id", id), zap.String("path", template.Path))
+				continue
+			}
+			if owner := metadata.Metadata["repository_id"]; owner != "" && owner != repoID {
+				return fmt.Errorf("repository %q %s: template %q is owned by repository %q", repoID, template.Path, id, owner)
+			}
+		}
+		templates = append(templates, template)
 	}
 
-	// Update global manifest
-	if err := g.updateGlobalManifest(ctx, repoManifest, templatesManifest); err != nil {
-		return fmt.Errorf("failed to update global manifest: %w", err)
+	manifest, err := g.storage.GetTemplateManifest(ctx)
+	if err != nil {
+		return fmt.Errorf("repository %q: read catalog manifest: %w", repoID, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("repository %q: %w", repoID, err)
 	}
 
-	g.lastSync = time.Now()
+	// Publish the exact buffers read and checked above.
+	for _, template := range templates {
+		if err := g.storage.StoreTemplate(ctx, template.Definition, template.Content, false, repoID); err != nil {
+			return fmt.Errorf("repository %q %s: store template: %w", repoID, template.Path, err)
+		}
+	}
+
+	now := time.Now()
+	manifest.Version = candidate.RepositoryVersion
+	manifest.LastSync = now
+	manifest.Statistics = repositoryStatistics(templates, manifest.Statistics.CustomTemplates)
+	if err := g.storage.UpdateTemplateManifest(ctx, manifest); err != nil {
+		return fmt.Errorf("repository %q: update catalog manifest: %w", repoID, err)
+	}
+
+	g.lastSync = now
 	g.logger.Info("GitHub template sync completed",
-		zap.Int("processed", processedCount),
-		zap.Int("errors", errorCount),
+		zap.String("repo_id", repoID),
+		zap.Int("processed", len(templates)),
 		zap.Time("last_sync", g.lastSync))
 
 	return nil
+}
+
+func repositoryStatistics(templates []repository.Template, customCount int) TemplateStatistics {
+	stats := TemplateStatistics{
+		TotalTemplates:    len(templates) + customCount,
+		StandardTemplates: len(templates),
+		CustomTemplates:   customCount,
+		ByType:            make(map[string]int),
+		ByPlatform:        make(map[string]int),
+		BySeverity:        make(map[string]int),
+	}
+	for _, template := range templates {
+		stats.ByType[template.Manifest.DetectionType]++
+		for _, platform := range template.Manifest.Platforms {
+			stats.ByPlatform[platform]++
+		}
+		stats.BySeverity[template.Manifest.Severity]++
+	}
+	return stats
 }
 
 // ensureRepository clones or updates the repository
@@ -154,169 +163,6 @@ func (g *GitHubSyncManager) ensureRepository(ctx context.Context) error {
 		if output, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("failed to update repository: %s, error: %w", string(output), err)
 		}
-	}
-
-	return nil
-}
-
-// loadRepositoryManifest loads the repository manifest
-func (g *GitHubSyncManager) loadRepositoryManifest() (*RepositoryManifest, error) {
-	manifestPath := filepath.Join(g.repoPath, "repository-manifest.json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read repository manifest: %w", err)
-	}
-
-	var manifest RepositoryManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse repository manifest: %w", err)
-	}
-
-	return &manifest, nil
-}
-
-// loadTemplatesManifest loads the templates manifest
-func (g *GitHubSyncManager) loadTemplatesManifest() (*GitHubTemplateManifest, error) {
-	manifestPath := filepath.Join(g.repoPath, "templates", "manifest.json")
-	data, err := os.ReadFile(manifestPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read templates manifest: %w", err)
-	}
-
-	var manifest GitHubTemplateManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, fmt.Errorf("failed to parse templates manifest: %w", err)
-	}
-
-	return &manifest, nil
-}
-
-// checkTemplateConflict checks if template exists from different repository
-func (g *GitHubSyncManager) checkTemplateConflict(ctx context.Context, templateID string, currentRepoID string) error {
-	// Get template metadata to check repository source
-	metadata, err := g.storage.GetTemplateMetadata(ctx, templateID)
-	if err != nil {
-		return nil // Error getting metadata, allow processing
-	}
-	if metadata == nil {
-		return nil // No conflict - template doesn't exist
-	}
-
-	// Check if template is from a different repository
-	existingRepoID, exists := metadata.Metadata["repository_id"]
-	if exists && existingRepoID != "" && existingRepoID != currentRepoID {
-		return fmt.Errorf("template conflict: template %s already exists from repository %s (current: %s)",
-			templateID, existingRepoID, currentRepoID)
-	}
-
-	return nil
-}
-
-// processTemplate processes a single template
-func (g *GitHubSyncManager) processTemplate(ctx context.Context, templatePath string, entry *TemplateManifestEntry, repoID string) error {
-	// Check for conflicts BEFORE processing
-	if err := g.checkTemplateConflict(ctx, entry.ID, repoID); err != nil {
-		return err
-	}
-	// Read template file
-	fullPath := filepath.Join(g.repoPath, "templates", templatePath)
-	content, err := os.ReadFile(fullPath)
-	if err != nil {
-		return fmt.Errorf("failed to read template file: %w", err)
-	}
-
-	// Parse template
-	template, err := g.parseTemplate(content, entry)
-	if err != nil {
-		return fmt.Errorf("failed to parse template: %w", err)
-	}
-
-	// Validate template
-	if err := g.storage.ValidateTemplate(template, content); err != nil {
-		return fmt.Errorf("template validation failed: %w", err)
-	}
-
-	// Store template in ValKey with repository ID
-	if err := g.storage.StoreTemplate(ctx, template, content, false, repoID); err != nil {
-		return fmt.Errorf("failed to store template: %w", err)
-	}
-
-	g.logger.Debug("Template processed successfully",
-		zap.String("id", template.ID),
-		zap.String("path", templatePath))
-
-	return nil
-}
-
-// parseTemplate parses template content and creates a types.Template
-func (g *GitHubSyncManager) parseTemplate(content []byte, entry *TemplateManifestEntry) (*types.Template, error) {
-	// Parse the actual YAML content
-	var template types.Template
-	if err := yaml.Unmarshal(content, &template); err != nil {
-		return nil, fmt.Errorf("failed to parse template YAML: %w", err)
-	}
-
-	// Override with manifest entry values if template values are missing
-	if template.ID == "" {
-		template.ID = entry.ID
-	}
-	if template.Info.Version == "" {
-		template.Info.Version = entry.Version
-	}
-	if template.Info.Author == "" {
-		template.Info.Author = entry.Author
-	}
-	if template.Info.Severity == "" {
-		template.Info.Severity = types.Severity(entry.Severity)
-	}
-
-	g.logger.Debug("Parsed template from YAML",
-		zap.String("id", template.ID),
-		zap.String("name", template.Info.Name),
-		zap.Int("steps", len(template.Detection.Steps)))
-
-	return &template, nil
-}
-
-// updateGlobalManifest updates the global template manifest
-func (g *GitHubSyncManager) updateGlobalManifest(ctx context.Context, repoManifest *RepositoryManifest, templatesManifest *GitHubTemplateManifest) error {
-	// Get current manifest
-	currentManifest, err := g.storage.GetTemplateManifest(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to get current manifest: %w", err)
-	}
-
-	// Update manifest
-	currentManifest.Version = repoManifest.Version
-	currentManifest.LastSync = time.Now()
-
-	// Update statistics
-	currentManifest.Statistics = TemplateStatistics{
-		TotalTemplates:    len(templatesManifest.Templates),
-		StandardTemplates: len(templatesManifest.Templates),
-		CustomTemplates:   0, // Will be updated separately
-		ByType:            make(map[string]int),
-		ByPlatform:        make(map[string]int),
-		BySeverity:        make(map[string]int),
-	}
-
-	// Count by type, platform, and severity
-	for _, entry := range templatesManifest.Templates {
-		// Count by type
-		currentManifest.Statistics.ByType[entry.DetectionType]++
-
-		// Count by platform
-		for _, platform := range entry.Platforms {
-			currentManifest.Statistics.ByPlatform[platform]++
-		}
-
-		// Count by severity
-		currentManifest.Statistics.BySeverity[entry.Severity]++
-	}
-
-	// Store updated manifest
-	if err := g.storage.UpdateTemplateManifest(ctx, currentManifest); err != nil {
-		return fmt.Errorf("failed to update global manifest: %w", err)
 	}
 
 	return nil

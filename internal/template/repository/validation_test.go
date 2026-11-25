@@ -16,7 +16,7 @@ const validTemplate = "id: example-one\ninfo:\n  name: Example\n  severity: low\
 
 func TestLoadStrictRepository(t *testing.T) {
 	const name = "nested/check.yml"
-	directory := writeRepository(t, 2, map[string]string{name: validTemplate}, map[string]manifestEntry{
+	directory := writeRepository(t, 2, map[string]string{name: validTemplate}, map[string]ManifestEntry{
 		name: verifiedEntry("example-one", validTemplate),
 	})
 
@@ -40,7 +40,7 @@ func TestLoadLegacyDefaultsAndWarnings(t *testing.T) {
 	const name = "legacy.yaml"
 	legacyTemplate := strings.ReplaceAll(validTemplate, "id: example-one\n", "")
 	legacyTemplate = strings.ReplaceAll(legacyTemplate, "  severity: low\n", "")
-	directory := writeRepository(t, 0, map[string]string{name: legacyTemplate}, map[string]manifestEntry{
+	directory := writeRepository(t, 0, map[string]string{name: legacyTemplate}, map[string]ManifestEntry{
 		name: {ID: "example-one", Version: "1.5.0", Author: "Example", Severity: "low", Checksum: "sha256:pending"},
 	})
 
@@ -71,7 +71,7 @@ func TestLoadReportsRepositoryDrift(t *testing.T) {
 		"bad-hash.yaml": strings.ReplaceAll(validTemplate, "example-one", "bad-hash"),
 	}
 	incorrectSize := int64(1)
-	entries := map[string]manifestEntry{
+	entries := map[string]ManifestEntry{
 		"a.yaml":        verifiedEntry("example-one", validTemplate),
 		"nested/b.yml":  {ID: "example-one", Checksum: "sha256:" + strings.Repeat("0", 64), Size: &incorrectSize},
 		"id.yaml":       {ID: "another-id", Checksum: "sha256:pending"},
@@ -106,7 +106,7 @@ func TestLoadStrictRejectsMissingIntegrityMetadata(t *testing.T) {
 	const missingID = "info:\n  name: Example\n  severity: low\ndetection:\n  steps:\n    - type: file_hash\n"
 	for _, checksum := range []string{"", "sha256:pending"} {
 		t.Run(checksum, func(t *testing.T) {
-			directory := writeRepository(t, 2, map[string]string{name: missingID}, map[string]manifestEntry{
+			directory := writeRepository(t, 2, map[string]string{name: missingID}, map[string]ManifestEntry{
 				name: {ID: "example-one", Checksum: checksum},
 			})
 			candidate, err := Load(directory)
@@ -126,12 +126,12 @@ func TestLoadStrictRejectsMissingIntegrityMetadata(t *testing.T) {
 	}
 }
 
-func verifiedEntry(id, content string) manifestEntry {
+func verifiedEntry(id, content string) ManifestEntry {
 	size := int64(len(content))
-	return manifestEntry{ID: id, Size: &size, Checksum: fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(content)))}
+	return ManifestEntry{ID: id, Size: &size, Checksum: fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(content)))}
 }
 
-func writeRepository(t *testing.T, version int, files map[string]string, entries map[string]manifestEntry) string {
+func writeRepository(t *testing.T, version int, files map[string]string, entries map[string]ManifestEntry) string {
 	t.Helper()
 	directory := t.TempDir()
 	write := func(name, content string) {
@@ -148,7 +148,7 @@ func writeRepository(t *testing.T, version int, files map[string]string, entries
 	write(repositoryManifestPath, `{"version":"2026.1"}`)
 	manifest := struct {
 		FormatVersion int                      `json:"format_version,omitempty"`
-		Templates     map[string]manifestEntry `json:"templates"`
+		Templates     map[string]ManifestEntry `json:"templates"`
 	}{version, entries}
 	raw, err := json.Marshal(manifest)
 	if err != nil {

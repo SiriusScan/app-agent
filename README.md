@@ -159,8 +159,13 @@ the recursively listed `.yaml` and `.yml` template files. It reports missing
 and unlisted files, invalid detection steps, duplicate IDs, and manifest drift
 with repository-relative paths. It exits with status 1 for validation errors
 and 0 on success. It needs no Valkey or remote service and does not execute
-templates or scripts. This rollout adds the offline command. Engine import
-integration follows the official module manifest cleanup.
+templates or scripts.
+
+Engine imports use the same validator. The engine checks the complete
+checkout before writing to the catalog and stores the exact bytes that
+passed validation. Validation errors keep the previous catalog available
+and mark the sync as failed. An active custom template takes precedence
+over an incoming standard template with the same ID.
 
 | Template manifest `format_version` | Checksum, size, and ID policy |
 | --- | --- |

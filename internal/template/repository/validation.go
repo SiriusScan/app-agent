@@ -31,16 +31,19 @@ const (
 
 type templateManifest struct {
 	FormatVersion *int                      `json:"format_version"`
-	Templates     map[string]*manifestEntry `json:"templates"`
+	Templates     map[string]*ManifestEntry `json:"templates"`
 }
 
-type manifestEntry struct {
-	ID       string `json:"id"`
-	Version  string `json:"version"`
-	Checksum string `json:"checksum"`
-	Size     *int64 `json:"size"`
-	Severity string `json:"severity"`
-	Author   string `json:"author"`
+// ManifestEntry contains the declared metadata for a repository template.
+type ManifestEntry struct {
+	ID            string   `json:"id"`
+	Version       string   `json:"version"`
+	Checksum      string   `json:"checksum"`
+	Size          *int64   `json:"size"`
+	Severity      string   `json:"severity"`
+	Author        string   `json:"author"`
+	Platforms     []string `json:"platforms"`
+	DetectionType string   `json:"detection_type"`
 }
 
 // Candidate holds a validated template inventory and any legacy compatibility warnings.
@@ -56,6 +59,7 @@ type Template struct {
 	Path       string
 	Definition *types.Template
 	Content    []byte
+	Manifest   ManifestEntry
 }
 
 // Load checks the root and template manifests and stages all listed templates.
@@ -177,7 +181,7 @@ func Load(directory string) (Candidate, error) {
 			}
 		}
 		if len(issues) == issueCount {
-			validated = append(validated, Template{Path: filePath, Definition: definition, Content: content})
+			validated = append(validated, Template{Path: filePath, Definition: definition, Content: content, Manifest: *entry})
 		}
 	}
 
@@ -281,7 +285,7 @@ func isLegacyPlaceholder(checksum string) bool {
 	return false
 }
 
-func parseTemplate(content []byte, entry *manifestEntry, strict bool) (*types.Template, error) {
+func parseTemplate(content []byte, entry *ManifestEntry, strict bool) (*types.Template, error) {
 	definition, err := parser.ParseTemplateBytes(content)
 	if err != nil {
 		return nil, err
