@@ -16,10 +16,15 @@ import (
 
 // repositoryStorage is the set of catalog operations used by GitHub sync.
 type repositoryStorage interface {
-	GetTemplateMetadata(ctx context.Context, templateID string) (*TemplateInfo, error)
+	getTemplateMetadata(ctx context.Context, templateID string) (*TemplateInfo, string, error)
 	GetTemplateManifest(ctx context.Context) (*TemplateManifest, error)
-	StoreTemplate(ctx context.Context, template *types.Template, content []byte, isCustom bool, repositoryID ...string) error
+	storeRepositoryTemplate(ctx context.Context, template *types.Template, content []byte, repositoryID, metadataSnapshot string) error
 	UpdateTemplateManifest(ctx context.Context, manifest *TemplateManifest) error
+}
+
+type stagedTemplate struct {
+	repository.Template
+	metadataSnapshot string
 }
 
 // GitHubSyncManager manages synchronization with GitHub repositories
@@ -69,10 +74,10 @@ func (g *GitHubSyncManager) syncCheckout(ctx context.Context, repoID string) err
 
 	// The standard and custom records currently share their metadata and
 	// version keys. Keep the active custom record when it shadows a standard ID.
-	templates := make([]repository.Template, 0, len(candidate.Templates))
+	templates := make([]stagedTemplate, 0, len(candidate.Templates))
 	for _, template := range candidate.Templates {
 		id := template.Definition.ID
-		metadata, err := g.storage.GetTemplateMetadata(ctx, id)
+		metadata, snapshot, err := g.storage.getTemplateMetadata(ctx, id)
 		if err != nil {
 			return fmt.Errorf("repository %q %s: check catalog metadata: %w", repoID, template.Path, err)
 		}
@@ -86,7 +91,7 @@ func (g *GitHubSyncManager) syncCheckout(ctx context.Context, repoID string) err
 				return fmt.Errorf("repository %q %s: template %q is owned by repository %q", repoID, template.Path, id, owner)
 			}
 		}
-		templates = append(templates, template)
+		templates = append(templates, stagedTemplate{Template: template, metadataSnapshot: snapshot})
 	}
 
 	manifest, err := g.storage.GetTemplateManifest(ctx)
@@ -99,7 +104,7 @@ func (g *GitHubSyncManager) syncCheckout(ctx context.Context, repoID string) err
 
 	// Publish the exact buffers read and checked above.
 	for _, template := range templates {
-		if err := g.storage.StoreTemplate(ctx, template.Definition, template.Content, false, repoID); err != nil {
+		if err := g.storage.storeRepositoryTemplate(ctx, template.Definition, template.Content, repoID, template.metadataSnapshot); err != nil {
 			return fmt.Errorf("repository %q %s: store template: %w", repoID, template.Path, err)
 		}
 	}
@@ -121,7 +126,7 @@ func (g *GitHubSyncManager) syncCheckout(ctx context.Context, repoID string) err
 	return nil
 }
 
-func repositoryStatistics(templates []repository.Template, customCount int) TemplateStatistics {
+func repositoryStatistics(templates []stagedTemplate, customCount int) TemplateStatistics {
 	stats := TemplateStatistics{
 		TotalTemplates:    len(templates) + customCount,
 		StandardTemplates: len(templates),

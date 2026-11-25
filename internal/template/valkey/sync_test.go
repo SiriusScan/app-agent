@@ -124,6 +124,42 @@ func TestSyncCheckoutPreflightsOwnership(t *testing.T) {
 	}
 }
 
+func TestSyncCheckoutFencesConcurrentCustomWrite(t *testing.T) {
+	for _, name := range []string{"content first", "metadata also published"} {
+		t.Run(name, func(t *testing.T) {
+			directory := writeSyncCheckout(t, map[string]string{"check.yaml": fixtureTemplate("CHECK")})
+			storage := &fixtureCatalog{
+				metadata: map[string]*TemplateInfo{
+					"CHECK": {ID: "CHECK", Metadata: map[string]string{"repository_id": "fixture"}},
+				},
+				customContents: make(map[string]string),
+			}
+			storage.onManifestRead = func() {
+				storage.customContents["CHECK"] = "operator content"
+				if name == "metadata also published" {
+					storage.metadata["CHECK"] = &TemplateInfo{ID: "CHECK", IsCustom: true, Checksum: "operator-checksum"}
+				}
+			}
+			lastGood := time.Unix(10, 0)
+			manager := &GitHubSyncManager{storage: storage, logger: zap.NewNop(), repoPath: directory, lastSync: lastGood}
+
+			err := manager.syncCheckout(context.Background(), "fixture")
+			if !errors.Is(err, errFixtureCatalogChanged) || !strings.Contains(err.Error(), "templates/check.yaml") {
+				t.Fatalf("expected the concurrent write to prevent publication, got %v", err)
+			}
+			if len(storage.contents) != 0 || storage.manifestWrites != 0 || !manager.GetLastSyncTime().Equal(lastGood) {
+				t.Fatalf("standard write succeeded after the override: %+v", storage)
+			}
+			if storage.customContents["CHECK"] != "operator content" {
+				t.Fatal("operator content was lost")
+			}
+			if name == "metadata also published" && !storage.metadata["CHECK"].IsCustom {
+				t.Fatal("operator metadata was overwritten")
+			}
+		})
+	}
+}
+
 func TestSyncCheckoutReturnsStorageFailure(t *testing.T) {
 	directory := writeSyncCheckout(t, map[string]string{"check.yaml": fixtureTemplate("CHECK")})
 	storeErr := errors.New("catalog write failed")
@@ -140,10 +176,13 @@ func TestSyncCheckoutReturnsStorageFailure(t *testing.T) {
 	}
 }
 
+var errFixtureCatalogChanged = errors.New("template catalog changed after preflight")
+
 type fixtureCatalog struct {
 	metadata       map[string]*TemplateInfo
 	manifest       TemplateManifest
 	contents       map[string]string
+	customContents map[string]string
 	metadataReads  []string
 	manifestReads  int
 	manifestWrites int
@@ -151,9 +190,19 @@ type fixtureCatalog struct {
 	storeErr       error
 }
 
-func (s *fixtureCatalog) GetTemplateMetadata(_ context.Context, id string) (*TemplateInfo, error) {
+func (s *fixtureCatalog) getTemplateMetadata(_ context.Context, id string) (*TemplateInfo, string, error) {
 	s.metadataReads = append(s.metadataReads, id)
-	return s.metadata[id], nil
+	metadata := s.metadata[id]
+	raw, err := s.metadataSnapshot(id)
+	return metadata, raw, err
+}
+
+func (s *fixtureCatalog) metadataSnapshot(id string) (string, error) {
+	if s.metadata[id] == nil {
+		return "", nil
+	}
+	raw, err := json.Marshal(s.metadata[id])
+	return string(raw), err
 }
 
 func (s *fixtureCatalog) GetTemplateManifest(_ context.Context) (*TemplateManifest, error) {
@@ -165,9 +214,17 @@ func (s *fixtureCatalog) GetTemplateManifest(_ context.Context) (*TemplateManife
 	return &copy, nil
 }
 
-func (s *fixtureCatalog) StoreTemplate(_ context.Context, definition *types.Template, content []byte, custom bool, repoIDs ...string) error {
-	if custom || len(repoIDs) != 1 || repoIDs[0] != "fixture" {
-		return fmt.Errorf("unexpected catalog destination: %v, %v", custom, repoIDs)
+func (s *fixtureCatalog) storeRepositoryTemplate(_ context.Context, definition *types.Template, content []byte, repoID, snapshot string) error {
+	if repoID != "fixture" {
+		return fmt.Errorf("unexpected catalog destination: %s", repoID)
+	}
+	current, err := s.metadataSnapshot(definition.ID)
+	if err != nil {
+		return err
+	}
+	_, custom := s.customContents[definition.ID]
+	if snapshot != current || custom {
+		return errFixtureCatalogChanged
 	}
 	if s.storeErr != nil {
 		return s.storeErr

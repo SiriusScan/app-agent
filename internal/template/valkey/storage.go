@@ -68,28 +68,108 @@ type TemplateStatistics struct {
 // github.com/SiriusScan/go-api/sirius/store/templates.
 type TemplateInfo = sharedtemplates.TemplateRecord
 
-// StoreTemplate stores a template in ValKey with optional repository ID
+// StoreTemplate stores a template in ValKey with optional repository ID.
 func (s *ValKeyTemplateStorage) StoreTemplate(ctx context.Context, template *types.Template, content []byte, isCustom bool, repositoryID ...string) error {
-	// Skip if client is nil (graceful degradation)
 	if s.client == nil {
 		s.logger.Warn("Cannot store template - ValKey client is nil")
 		return nil
 	}
 
-	// Calculate checksum
-	checksum := s.calculateChecksum(content)
+	record := s.newTemplateRecord(template, content, isCustom, repositoryID...)
+	templateData, metaData, err := encodeTemplateRecord(record)
+	if err != nil {
+		return err
+	}
 
-	// Create template info with metadata
+	keyPrefix := TemplateStandardPrefix
+	if isCustom {
+		keyPrefix = TemplateCustomPrefix
+	}
+	templateKey := keyPrefix + template.ID
+	cmd := s.client.B().Set().Key(templateKey).Value(templateData).Build()
+	if err := s.client.Do(ctx, cmd).Error(); err != nil {
+		return fmt.Errorf("failed to store template: %w", err)
+	}
+
+	metaKey := TemplateMetaPrefix + template.ID
+	cmd = s.client.B().Set().Key(metaKey).Value(metaData).Build()
+	if err := s.client.Do(ctx, cmd).Error(); err != nil {
+		return fmt.Errorf("failed to store template metadata: %w", err)
+	}
+
+	versionKey := TemplateVersionPrefix + template.ID
+	cmd = s.client.B().Set().Key(versionKey).Value(record.Checksum).Build()
+	if err := s.client.Do(ctx, cmd).Error(); err != nil {
+		return fmt.Errorf("failed to store template version: %w", err)
+	}
+
+	s.logger.Info("Template stored successfully",
+		zap.String("id", template.ID),
+		zap.Bool("custom", isCustom),
+		zap.String("checksum", record.Checksum))
+	return nil
+}
+
+// The metadata comparison detects intervening ownership changes. The custom
+// content key also fences a custom writer between its content and metadata writes.
+var commitRepositoryTemplate = valkey.NewLuaScriptNoSha(`
+local current = redis.call("GET", KEYS[2])
+if current == false then
+    current = ""
+elseif current == "" then
+    return 0
+end
+if current ~= ARGV[1] or redis.call("EXISTS", KEYS[4]) ~= 0 then
+    return 0
+end
+redis.call("MSET", KEYS[1], ARGV[2], KEYS[2], ARGV[3], KEYS[3], ARGV[4])
+return 1
+`)
+
+func (s *ValKeyTemplateStorage) storeRepositoryTemplate(ctx context.Context, template *types.Template, content []byte, repositoryID, metadataSnapshot string) error {
+	if s.client == nil {
+		return fmt.Errorf("ValKey client is nil")
+	}
+	if s.client.Mode() == valkey.ClientModeCluster {
+		return fmt.Errorf("repository template keys require a standalone ValKey database for atomic writes")
+	}
+	record := s.newTemplateRecord(template, content, false, repositoryID)
+	templateData, metaData, err := encodeTemplateRecord(record)
+	if err != nil {
+		return err
+	}
+
+	keys := []string{
+		TemplateStandardPrefix + template.ID,
+		TemplateMetaPrefix + template.ID,
+		TemplateVersionPrefix + template.ID,
+		TemplateCustomPrefix + template.ID,
+	}
+	args := []string{metadataSnapshot, templateData, metaData, record.Checksum}
+	committed, err := commitRepositoryTemplate.Exec(ctx, s.client, keys, args).AsInt64()
+	if err != nil {
+		return fmt.Errorf("commit repository template: %w", err)
+	}
+	if committed != 1 {
+		return fmt.Errorf("template catalog changed after preflight or a custom template exists")
+	}
+
+	s.logger.Info("Template stored successfully",
+		zap.String("id", template.ID),
+		zap.Bool("custom", false),
+		zap.String("checksum", record.Checksum))
+	return nil
+}
+
+func (s *ValKeyTemplateStorage) newTemplateRecord(template *types.Template, content []byte, isCustom bool, repositoryID ...string) *TemplateInfo {
 	metadata := make(map[string]string)
 	if len(repositoryID) > 0 && repositoryID[0] != "" {
 		metadata["repository_id"] = repositoryID[0]
 	}
-
-	// Create template info
-	templateInfo := &TemplateInfo{
+	return &TemplateInfo{
 		ID:               template.ID,
 		Version:          template.Info.Version,
-		Checksum:         checksum,
+		Checksum:         s.calculateChecksum(content),
 		Size:             int64(len(content)),
 		Severity:         string(template.Info.Severity),
 		Platforms:        getPlatformsFromDetection(template.Detection),
@@ -102,54 +182,20 @@ func (s *ValKeyTemplateStorage) StoreTemplate(ctx context.Context, template *typ
 		Content:          content,
 		Metadata:         metadata,
 	}
+}
 
-	// Determine key prefix
-	var keyPrefix string
-	if isCustom {
-		keyPrefix = TemplateCustomPrefix
-	} else {
-		keyPrefix = TemplateStandardPrefix
-	}
-
-	// Store template content
-	templateKey := keyPrefix + template.ID
-	templateData, err := json.Marshal(templateInfo)
+func encodeTemplateRecord(record *TemplateInfo) (string, string, error) {
+	templateData, err := json.Marshal(record)
 	if err != nil {
-		return fmt.Errorf("failed to marshal template: %w", err)
+		return "", "", fmt.Errorf("failed to marshal template: %w", err)
 	}
-
-	cmd := s.client.B().Set().Key(templateKey).Value(string(templateData)).Build()
-	if err := s.client.Do(ctx, cmd).Error(); err != nil {
-		return fmt.Errorf("failed to store template: %w", err)
-	}
-
-	// Store template metadata (without content)
-	metaInfo := *templateInfo
+	metaInfo := *record
 	metaInfo.Content = nil
-	metaKey := TemplateMetaPrefix + template.ID
 	metaData, err := json.Marshal(metaInfo)
 	if err != nil {
-		return fmt.Errorf("failed to marshal template metadata: %w", err)
+		return "", "", fmt.Errorf("failed to marshal template metadata: %w", err)
 	}
-
-	cmd = s.client.B().Set().Key(metaKey).Value(string(metaData)).Build()
-	if err := s.client.Do(ctx, cmd).Error(); err != nil {
-		return fmt.Errorf("failed to store template metadata: %w", err)
-	}
-
-	// Store version/checksum for cache invalidation
-	versionKey := TemplateVersionPrefix + template.ID
-	cmd = s.client.B().Set().Key(versionKey).Value(checksum).Build()
-	if err := s.client.Do(ctx, cmd).Error(); err != nil {
-		return fmt.Errorf("failed to store template version: %w", err)
-	}
-
-	s.logger.Info("Template stored successfully",
-		zap.String("id", template.ID),
-		zap.Bool("custom", isCustom),
-		zap.String("checksum", checksum))
-
-	return nil
+	return string(templateData), string(metaData), nil
 }
 
 // GetTemplate retrieves a template from ValKey
@@ -205,8 +251,13 @@ func (s *ValKeyTemplateStorage) GetTemplate(ctx context.Context, templateID stri
 
 // GetTemplateMetadata retrieves template metadata from ValKey
 func (s *ValKeyTemplateStorage) GetTemplateMetadata(ctx context.Context, templateID string) (*TemplateInfo, error) {
+	metadata, _, err := s.getTemplateMetadata(ctx, templateID)
+	return metadata, err
+}
+
+func (s *ValKeyTemplateStorage) getTemplateMetadata(ctx context.Context, templateID string) (*TemplateInfo, string, error) {
 	if s.client == nil {
-		return nil, fmt.Errorf("ValKey client is nil")
+		return nil, "", fmt.Errorf("ValKey client is nil")
 	}
 
 	metaKey := TemplateMetaPrefix + templateID
@@ -214,22 +265,22 @@ func (s *ValKeyTemplateStorage) GetTemplateMetadata(ctx context.Context, templat
 	resp := s.client.Do(ctx, cmd)
 	if err := resp.Error(); err != nil {
 		if valkey.IsValkeyNil(err) {
-			return nil, nil // Template not found
+			return nil, "", nil // Template not found
 		}
-		return nil, fmt.Errorf("failed to get template metadata: %w", err)
+		return nil, "", fmt.Errorf("failed to get template metadata: %w", err)
 	}
 
 	metaData, err := resp.ToString()
 	if err != nil {
-		return nil, fmt.Errorf("failed to convert metadata to string: %w", err)
+		return nil, "", fmt.Errorf("failed to convert metadata to string: %w", err)
 	}
 
 	var templateInfo TemplateInfo
 	if err := json.Unmarshal([]byte(metaData), &templateInfo); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal template metadata: %w", err)
+		return nil, "", fmt.Errorf("failed to unmarshal template metadata: %w", err)
 	}
 
-	return &templateInfo, nil
+	return &templateInfo, metaData, nil
 }
 
 // GetTemplateManifest retrieves the global template manifest

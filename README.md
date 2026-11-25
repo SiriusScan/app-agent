@@ -165,7 +165,9 @@ Engine imports use the same validator. The engine checks the complete
 checkout before writing to the catalog and stores the exact bytes that
 passed validation. Validation errors keep the previous catalog available
 and mark the sync as failed. An active custom template takes precedence
-over an incoming standard template with the same ID.
+over an incoming standard template with the same ID. A standard record is
+committed atomically on the standalone Valkey database only if the catalog
+metadata still matches what the importer read and the custom key is absent.
 
 | Template manifest `format_version` | Checksum, size, and ID policy |
 | --- | --- |
