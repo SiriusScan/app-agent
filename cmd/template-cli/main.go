@@ -7,15 +7,17 @@ import (
 	"io"
 	"os"
 
-	siriusbootstrap "github.com/SiriusScan/app-agent/internal/family/sirius/bootstrap"
+	_ "github.com/SiriusScan/app-agent/internal/modules/filecontent"
+	_ "github.com/SiriusScan/app-agent/internal/modules/filehash"
+	_ "github.com/SiriusScan/app-agent/internal/modules/filesearch"
 	"github.com/SiriusScan/app-agent/internal/modules/registry"
+	_ "github.com/SiriusScan/app-agent/internal/modules/versioncmd"
 	"github.com/SiriusScan/app-agent/internal/template/executor"
 	"github.com/SiriusScan/app-agent/internal/template/parser"
 	"github.com/SiriusScan/app-agent/internal/template/repository"
 )
 
 func main() {
-	siriusbootstrap.LoadCompatibilityRuntime()
 	if len(os.Args) < 2 {
 		printUsage()
 		os.Exit(1)
